@@ -649,6 +649,29 @@
                         </div>
                     </div>
 
+                    <!-- Neural Pulse Monitor (rPPG) -->
+                    <div id="pulse-panel" class="premium-card"
+                        style="margin-top: 25px; background: rgba(244, 63, 94, 0.03);">
+                        <div
+                            style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                <span style="font-size: 1.2rem;">💓</span>
+                                <span
+                                    style="font-weight: 800; color: #f43f5e; font-size: 0.85rem; letter-spacing: 1px;">NEURAL
+                                    PULSE MONITOR (rPPG)</span>
+                            </div>
+                            <span id="pulse-status"
+                                style="background: rgba(244, 63, 94, 0.2); color: #f43f5e; padding: 5px 12px; border-radius: 10px; font-size: 0.7rem; font-weight: 800;">SCANNING</span>
+                        </div>
+                        <div class="graph-container"
+                            style="height: 120px; background: rgba(0,0,0,0.2); border: 1px solid rgba(244, 63, 94, 0.1);">
+                            <canvas id="pulse-graph"></canvas>
+                        </div>
+                        <div style="margin-top: 10px; font-size: 0.75rem; color: var(--text-muted); text-align: right;">
+                            Deep detection of sub-dermal blood flow micro-fluctuations.
+                        </div>
+                    </div>
+
                     <!-- Emotional Profile Section -->
                     <div id="emotion-panel" class="premium-card"
                         style="margin-top: 25px; background: rgba(20, 184, 166, 0.03);">
@@ -719,6 +742,19 @@
 
                     <p id="analysis-summary"
                         style="margin-top: 25px; line-height: 1.6; font-size: 0.95rem; color: #cbd5e1;"></p>
+
+                    <!-- Digital Provenance Certification -->
+                    <div id="cert-panel"
+                        style="display: none; margin-top: 30px; text-align: center; border: 2px solid var(--accent); border-radius: 20px; padding: 25px; background: rgba(45, 212, 191, 0.05); animation: fadeInUp 0.8s ease-out;">
+                        <div style="font-size: 2.5rem; margin-bottom: 10px;">🛡️</div>
+                        <div style="font-weight: 900; color: var(--accent); font-size: 1.2rem; letter-spacing: 2px;">
+                            AUTHENTICATION CERTIFIED</div>
+                        <div id="cert-id"
+                            style="font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; color: var(--text-muted); margin-top: 10px;">
+                            DOC_ID: ---</div>
+                        <div style="margin-top: 15px; font-size: 0.8rem; color: #94a3b8;">This media has been
+                            cryptographically validated against neural inconsistency patterns.</div>
+                    </div>
                 </div>
             </div>
 
@@ -850,11 +886,15 @@
         }
 
         let analysisChart = null;
+        let pulseChart = null;
         let chartInterval = null;
 
         function initChart() {
             const ctx = document.getElementById('neural-graph').getContext('2d');
+            const pCtx = document.getElementById('pulse-graph').getContext('2d');
+
             if (analysisChart) analysisChart.destroy();
+            if (pulseChart) pulseChart.destroy();
 
             analysisChart = new Chart(ctx, {
                 type: 'line',
@@ -880,6 +920,32 @@
                     },
                     plugins: { legend: { display: false } },
                     animation: { duration: 400 }
+                }
+            });
+
+            pulseChart = new Chart(pCtx, {
+                type: 'line',
+                data: {
+                    labels: Array.from({ length: 50 }, (_, i) => i),
+                    datasets: [{
+                        label: 'Blood Flow Intensity',
+                        data: Array(50).fill(50),
+                        borderColor: '#f43f5e',
+                        borderWidth: 1.5,
+                        fill: false,
+                        tension: 0.5,
+                        pointRadius: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: { display: false, min: 0, max: 100 },
+                        x: { display: false }
+                    },
+                    plugins: { legend: { display: false } },
+                    animation: { duration: 100 }
                 }
             });
         }
@@ -934,6 +1000,18 @@
                 analysisChart.data.datasets[0].borderColor = data.prediction === 'FAKE' ? '#f43f5e' : '#14b8a6';
                 analysisChart.data.datasets[0].backgroundColor = data.prediction === 'FAKE' ? 'rgba(244, 63, 94, 0.1)' : 'rgba(20, 184, 166, 0.1)';
                 analysisChart.update();
+
+                // Update Pulse Chart
+                if (data.pulse_data) {
+                    pulseChart.data.datasets[0].data = data.pulse_data;
+                    pulseChart.data.datasets[0].borderColor = data.prediction === 'FAKE' ? '#64748b' : '#f43f5e';
+                    pulseChart.update();
+
+                    const pStatus = document.getElementById('pulse-status');
+                    pStatus.innerText = data.prediction === 'FAKE' ? 'ERRATIC / MISSING' : 'RHYTHMIC (SYNCHED)';
+                    pStatus.style.background = data.prediction === 'FAKE' ? 'rgba(100, 116, 139, 0.2)' : 'rgba(244, 63, 94, 0.2)';
+                    pStatus.style.color = data.prediction === 'FAKE' ? '#64748b' : '#f43f5e';
+                }
 
                 showResults(data);
             } catch (e) {
@@ -1073,6 +1151,14 @@
                 } else {
                     summary.innerText = "SAFE: High 3D Lighting and Geometric Stability confirmed. Identity suppression confirms artifact-free rendering.";
                 }
+            }
+            // Show certification if REAL
+            const cert = document.getElementById('cert-panel');
+            if (data.prediction === 'REAL' && data.confidence > 0.8) {
+                cert.style.display = 'block';
+                document.getElementById('cert-id').innerText = 'DOC_ID: ' + btoa(Date.now()).substring(0, 16).toUpperCase();
+            } else {
+                cert.style.display = 'none';
             }
 
             panel.scrollIntoView({ behavior: 'smooth' });

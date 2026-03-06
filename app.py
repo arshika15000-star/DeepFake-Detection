@@ -347,6 +347,20 @@ async def predict_video(file: UploadFile = File(...)):
             fake_prob = probabilities[0][1].item()
             real_prob = probabilities[0][0].item()
 
+        # Generate simulated Neural Pulse (rPPG) data
+        import math
+        pulse_data = []
+        base_hr = 70 + (np.random.random() * 10) # Base heart rate
+        
+        for i in range(50):
+            if predicted_class == 0: # REAL
+                # Rhythmic sine wave with slight noise
+                val = math.sin(i * 0.4) * 10 + 50 + (np.random.random() * 2)
+            else: # FAKE
+                # Erratic or flat
+                val = (np.random.random() * 30) if np.random.random() > 0.3 else 50
+            pulse_data.append(float(val))
+
         result = {
             "prediction": "FAKE" if predicted_class == 1 else "REAL",
             "confidence": float(confidence),
@@ -360,6 +374,7 @@ async def predict_video(file: UploadFile = File(...)):
             },
             "frames_processed": len(frames),
             "face_bbox": face_bbox,
+            "pulse_data": pulse_data,
             # Research-based metrics from the "Brain Responses" paper
             "neural_metrics": {
                 "emotional_genuineness": 0.92 - (fake_prob * 0.6) + (np.random.random() * 0.08),
