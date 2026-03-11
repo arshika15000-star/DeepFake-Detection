@@ -1546,8 +1546,8 @@
             canvas.getContext('2d').drawImage(video, 0, 0);
 
             canvas.toBlob(async blob => {
-                selectedFile = new File([blob], "webcam_capture.jpg", { type: 'image/jpeg' });
                 document.getElementById('tab-image').click();
+                selectedFile = new File([blob], "webcam_capture.jpg", { type: 'image/jpeg' });
                 runAnalysis();
             }, 'image/jpeg');
         }

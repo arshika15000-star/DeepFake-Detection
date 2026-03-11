@@ -1,172 +1,201 @@
-import { useState } from 'react'
-import Robot from './Robot'
+import React, { useState, useRef, useEffect } from 'react';
+import NeuralBackground from './components/NeuralBackground';
+import NeuralCenterpiece from './components/NeuralCenterpiece';
+import ModalityCard from './components/ModalityCard';
+import ScannerView from './components/ScannerView';
+import ResultDashboard from './components/ResultDashboard';
+import { Camera, Video, Mic, Type, Upload, ArrowLeft, Activity } from 'lucide-react';
+import axios from 'axios';
+
+const API_BASE = "http://127.0.0.1:8000";
+
+const modalities = [
+  { id: 'image', title: 'Image Neural Scan', icon: <Camera />, desc: 'Detect facial warps, ELA compression, and frequency artifacts in static frames.', color: 'primary' },
+  { id: 'video', title: 'Video Stream Probe', icon: <Video />, desc: 'Analyze temporal coherence, multi-frame consistency, and localized movement anomalies.', color: 'secondary' },
+  { id: 'audio', title: 'Vocal Frequency Lab', icon: <Mic />, desc: 'Identify synthetic vocoder patterns, cloned speech jitter, and spectral floor gaps.', color: 'primary' },
+  { id: 'text', title: 'Semantic Authenticity', icon: <Type />, desc: 'Evaluate linguistic formality, structural repetition, and LLM-specific syntactic markers.', color: 'secondary' },
+];
 
 export default function App() {
-  const [tab, setTab] = useState('video')
-  const [file, setFile] = useState(null)
-  const [preview, setPreview] = useState(null)
-  const [result, setResult] = useState(null)
-  const [loading, setLoading] = useState(false)
+  const [view, setView] = useState('home'); // home, modality, scanning, result
+  const [selectedModality, setSelectedModality] = useState(null);
+  const [analysisResult, setAnalysisResult] = useState(null);
+  const [file, setFile] = useState(null);
 
-  function handleFile(e) {
-    const f = e.target.files[0]
-    setFile(f)
-    setResult(null)
-    if (!f) return setPreview(null)
-    const url = URL.createObjectURL(f)
-    setPreview(url)
-  }
+  const handleModalitySelect = (mod) => {
+    setSelectedModality(mod);
+    setView('modality');
+  };
 
-  async function submit() {
-    if (!file) return
-    setLoading(true)
-    const form = new FormData()
-    form.append('file', file)
-
-    const endpoint = tab === 'video' ? '/predict' : '/predict_image'
+  const startAnalysis = async (inputData) => {
+    setView('scanning');
 
     try {
-      const res = await fetch(`http://localhost:8000${endpoint}`, { method: 'POST', body: form })
-      const json = await res.json()
-      setResult(json)
-    } catch (e) {
-      setResult({ error: "Make sure the backend is running! " + String(e) })
-    } finally {
-      setLoading(false)
-    }
-  }
+      const formData = new FormData();
+      let endpoint = '';
 
-  function ProbBar({ fake }) {
-    const pctFake = Math.round(fake * 100)
-    return (
-      <div style={{ width: '100%', background: 'rgba(255, 255, 255, 0.05)', height: 18, borderRadius: 9, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.1)' }}>
-        <div style={{ width: `${pctFake}%`, height: '100%', background: 'linear-gradient(to right, #a855f7, #ec4899)', boxShadow: '0 0 10px rgba(168, 85, 247, 0.5)' }} />
-      </div>
-    )
-  }
+      if (selectedModality.id === 'text') {
+        endpoint = '/predict_text';
+        formData.append('current_text', inputData);
+      } else {
+        endpoint = selectedModality.id === 'image' ? '/predict_image' :
+          selectedModality.id === 'audio' ? '/predict_audio' : '/predict';
+        formData.append('file', inputData);
+      }
+
+      const response = await axios.post(`${API_BASE}${endpoint}`, formData);
+      setAnalysisResult(response.data);
+    } catch (err) {
+      console.error(err);
+      alert("Neural Link Failure: " + (err.response?.data?.detail || err.message));
+      setView('modality');
+    }
+  };
+
+  const handleFileUpload = (e) => {
+    const f = e.target.files[0];
+    if (f) startAnalysis(f);
+  };
+
+  const handleTextSubmit = (txt) => {
+    if (txt.trim()) startAnalysis(txt);
+  };
 
   return (
-    <div className="card" style={{ maxWidth: 1000, width: '90%', margin: '40px auto' }}>
-      <h1>TruthLens AI</h1>
-      <p style={{ color: '#94a3b8', marginBottom: 30, fontSize: '1.1em' }}>Neural Integrity Verification System</p>
+    <div className="min-h-screen text-white overflow-x-hidden selection:bg-primary selection:text-dark">
+      {/* <NeuralBackground /> */}
 
-      <div style={{ display: 'flex', gap: 12, marginBottom: 30 }}>
-        <button
-          onClick={() => setTab('video')}
-          style={{
-            background: tab === 'video' ? '#a855f7' : 'rgba(255,255,255,0.05)',
-            border: tab === 'video' ? 'none' : '1px solid rgba(255,255,255,0.1)',
-            padding: '12px 24px',
-            color: 'white'
-          }}>
-          📸 Video Analysis
-        </button>
-        <button
-          onClick={() => setTab('image')}
-          style={{
-            background: tab === 'image' ? '#a855f7' : 'rgba(255,255,255,0.05)',
-            border: tab === 'image' ? 'none' : '1px solid rgba(255,255,255,0.1)',
-            padding: '12px 24px',
-            color: 'white'
-          }}>
-          🖼️ Image Analysis
-        </button>
-      </div>
-
-      <div style={{ display: 'flex', gap: 40, flexWrap: 'wrap' }}>
-        <div style={{ flex: 1, minWidth: 300 }}>
-          <div style={{
-            background: 'rgba(0,0,0,0.2)',
-            border: '2px dashed rgba(168, 85, 247, 0.3)',
-            padding: 40,
-            borderRadius: 20,
-            textAlign: 'center',
-            cursor: 'pointer',
-            position: 'relative',
-            overflow: 'hidden'
-          }} onClick={() => document.getElementById('fileInput').click()}>
-            <input id="fileInput" type="file" accept={tab === 'video' ? "video/*" : "image/*"} onChange={handleFile} style={{ display: 'none' }} />
-            <div style={{ fontSize: 40, marginBottom: 10 }}>☁️</div>
-            <div style={{ fontWeight: 600, color: '#e2e8f0' }}>{file ? file.name : `Select ${tab} to analyze`}</div>
-            <div style={{ fontSize: 13, color: '#94a3b8', marginTop: 8 }}>Drag and drop or click to browse</div>
+      {/* Navigation Header */}
+      <nav className="fixed top-0 left-0 right-0 z-40 px-6 lg:px-12 py-6">
+        <div className="max-w-7xl mx-auto flex justify-between items-center bg-dark/20 backdrop-blur-3xl rounded-3xl p-4 border border-white/5 shadow-2xl">
+          <div className="flex items-center gap-4 cursor-pointer" onClick={() => setView('home')}>
+            <div className="w-10 h-10 bg-gradient-to-br from-primary to-secondary rounded-xl flex items-center justify-center font-black italic shadow-[0_0_15px_rgba(34,211,238,0.4)]">DT</div>
+            <span className="text-2xl font-black italic tracking-tighter">DEEP<span className="text-primary tracking-normal not-italic font-light">TRUTH</span></span>
           </div>
 
-          <div style={{ marginTop: 24 }}>
-            <button
-              onClick={submit}
-              disabled={!file || loading}
-              style={{
-                width: '100%',
-                fontSize: '1.1em',
-                padding: '16px',
-                background: (file && !loading) ? 'linear-gradient(to right, #a855f7, #6366f1)' : '#333'
-              }}>
-              {loading ? '🔬 Processing Neural Framework...' : '🚀 Authenticate Media'}
-            </button>
+          <div className="hidden md:flex gap-8 text-[10px] font-bold uppercase tracking-[0.3em] opacity-40">
+            <span className="hover:text-primary hover:opacity-100 transition-all cursor-pointer">Protocol</span>
+            <span className="hover:text-primary hover:opacity-100 transition-all cursor-pointer">Network</span>
+            <span className="hover:text-primary hover:opacity-100 transition-all cursor-pointer">Archive</span>
           </div>
 
-          {result && !result.error && (
-            <div style={{
-              marginTop: 30,
-              padding: 24,
-              backgroundColor: 'rgba(255,255,255,0.03)',
-              borderRadius: 20,
-              border: `1px solid ${result.prediction === 'FAKE' ? 'rgba(239, 68, 68, 0.3)' : 'rgba(34, 197, 94, 0.3)'}`
-            }}>
-              <h2 style={{ margin: 0, fontSize: '1.2em', color: '#94a3b8' }}>VERIFICATION STATUS</h2>
-              <div style={{
-                fontSize: '2.5em',
-                fontWeight: 900,
-                color: result.prediction === 'FAKE' ? '#ef4444' : '#22c55e',
-                letterSpacing: 2,
-                marginTop: 10
-              }}>
-                {result.prediction}
-              </div>
-              <div style={{ fontSize: 14, color: '#94a3b8', marginTop: 4 }}>Confidence level: {(result.confidence * 100).toFixed(1)}%</div>
+          <div className={`px-4 py-1.5 rounded-full border border-primary/20 text-[8px] font-black uppercase tracking-widest text-primary ${view === 'scanning' ? 'animate-pulse' : ''}`}>
+            System Status: {view === 'scanning' ? 'Analyzing' : 'Ready'}
+          </div>
+        </div>
+      </nav>
 
-              <div style={{ marginTop: 20 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 8, color: '#e2e8f0' }}>
-                  <span>Manipulation Probability</span>
-                  <span>{(result.probabilities.fake * 100).toFixed(1)}%</span>
-                </div>
-                <ProbBar fake={result.probabilities.fake} />
+      {/* Main Views */}
+      <main className="relative z-10 pt-32 px-6">
+        {view === 'home' && (
+          <div className="max-w-7xl mx-auto text-center space-y-20 py-12">
+            <header className="space-y-6">
+              {/* <NeuralCenterpiece /> */}
+              <div className="inline-block px-4 py-1.5 rounded-full bg-primary/10 border border-primary/20 text-xs font-bold text-primary tracking-widest uppercase mb-4">
+                SOTA Multimodal Deepfake Defense
               </div>
-
-              <p style={{ fontSize: 13, color: '#64748b', marginTop: 20, lineHeight: 1.6 }}>
-                {result.prediction === 'FAKE'
-                  ? "Neural analysis detected synthetic artifacts and frame inconsistency patterns typical of Al-generated content."
-                  : "Scanning complete. Media shows high neural consistency and natural texture distribution patterns."}
+              <h1 className="text-7xl lg:text-9xl font-black italic tracking-tighter leading-[0.8]">
+                EXPLAINABLE <br />
+                <span className="text-gradient">NEURAL DEFENSE</span>
+              </h1>
+              <p className="max-w-2xl mx-auto text-dim text-lg leading-relaxed opacity-60">
+                Unified forensic laboratory for detecting high-fidelity synthetic media using multimodal attention patterns and biometric signals.
               </p>
-            </div>
-          )}
+            </header>
 
-          {result && result.error && (
-            <div style={{
-              marginTop: 20,
-              padding: 16,
-              background: 'rgba(239, 68, 68, 0.1)',
-              border: '1px solid rgba(239, 68, 68, 0.2)',
-              borderRadius: 12,
-              color: '#fca5a5',
-              fontSize: 14
-            }}>
-              ⚠️ Alert: {result.error}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
+              {modalities.map(mod => (
+                <ModalityCard
+                  key={mod.id}
+                  title={mod.title}
+                  icon={mod.icon}
+                  description={mod.desc}
+                  color={mod.color}
+                  onClick={() => handleModalitySelect(mod)}
+                />
+              ))}
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
-        <div style={{ width: 400, minHeight: 300, background: 'rgba(0,0,0,0.3)', borderRadius: 24, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.05)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          {preview ? (tab === 'image' ? (
-            <img src={preview} alt="preview" style={{ maxWidth: '100%', maxHeight: 400, display: 'block' }} />
-          ) : (
-            <video src={preview} controls style={{ maxWidth: '100%', maxHeight: 400, display: 'block' }} />
-          )) : (
-            <div style={{ color: '#475569', fontSize: '1.1em', fontWeight: 500 }}>Media Preview</div>
-          )}
-        </div>
-      </div>
-      <Robot />
+        {view === 'modality' && (
+          <div className="max-w-3xl mx-auto py-20 space-y-12 animate-in slide-in-from-bottom-10 fade-in duration-500">
+            <button
+              onClick={() => setView('home')}
+              className="flex items-center gap-3 text-xs font-bold uppercase tracking-widest text-dim hover:text-white transition-colors"
+            >
+              <ArrowLeft size={16} /> Back to Nexus
+            </button>
+
+            <div className="glass-morphism p-12 rounded-[3rem] border-primary/20 space-y-12">
+              <div className="text-center space-y-4">
+                <div className="text-6xl mb-4 italic flex justify-center">{selectedModality.icon}</div>
+                <h2 className="text-4xl font-black italic tracking-tighter">{selectedModality.title}</h2>
+                <p className="text-dim opacity-60">{selectedModality.desc}</p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <div
+                  className="group flex flex-col items-center justify-center bg-white/5 rounded-[2rem] p-10 border border-white/5 hover:border-primary/50 transition-all cursor-pointer relative overflow-hidden"
+                  onClick={() => document.getElementById('file-upload').click()}
+                >
+                  <div className="absolute inset-0 bg-primary/5 opacity-0 group-hover:opacity-100 transition-opacity" />
+                  <Upload className="text-primary mb-4" size={40} />
+                  <span className="text-sm font-black uppercase tracking-widest">Upload Deep File</span>
+                  <input
+                    id="file-upload"
+                    type="file"
+                    className="hidden"
+                    onChange={handleFileUpload}
+                  />
+                </div>
+
+                {selectedModality.id === 'text' ? (
+                  <div className="bg-white/5 rounded-[2rem] p-6 border border-white/5">
+                    <textarea
+                      id="text-capture"
+                      className="w-full h-32 bg-transparent border-none text-white font-mono text-sm resize-none focus:ring-0"
+                      placeholder="PASTE SEMANTIC DATA HERE..."
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && e.ctrlKey) handleTextSubmit(e.target.value);
+                      }}
+                    />
+                    <button
+                      onClick={() => handleTextSubmit(document.getElementById('text-capture').value)}
+                      className="w-full mt-4 bg-primary/10 border border-primary/30 py-4 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-primary hover:text-dark transition-all"
+                    >
+                      Execute Analysis
+                    </button>
+                  </div>
+                ) : (
+                  <div
+                    className="group flex flex-col items-center justify-center bg-white/5 rounded-[2rem] p-10 border border-white/5 hover:border-secondary/50 transition-all cursor-pointer relative overflow-hidden"
+                    onClick={() => alert(`Direct ${selectedModality.id} capture protocol active... (Simulation Mode)`)}
+                  >
+                    <div className="absolute inset-0 bg-secondary/5 opacity-0 group-hover:opacity-100 transition-opacity" />
+                    <Activity className="text-secondary mb-4" size={40} />
+                    <span className="text-sm font-black uppercase tracking-widest">Live Capture</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {view === 'scanning' && selectedModality && (
+          <ScannerView
+            modality={selectedModality.id}
+            onComplete={() => setView('result')}
+          />
+        )}
+
+        {view === 'result' && analysisResult && (
+          <ResultDashboard
+            result={analysisResult}
+            onReset={() => setView('home')}
+          />
+        )}
+      </main>
     </div>
-  )
+  );
 }

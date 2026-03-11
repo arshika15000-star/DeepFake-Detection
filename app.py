@@ -313,7 +313,12 @@ def analyze_3d_mesh_integrity(img_np):
     return results
 
 
-app = FastAPI(title="TruthLens AI | Neural Forgery Defense API", description="SOTA Deepfake Detection with Forensic Explainability", version="2.0.0", lifespan=lifespan)
+app = FastAPI(
+    title="DeepTruth AI | Multimodal Intelligence Defense",
+    description="Futuristic Deepfake Detection with Explainable Neural Signatures",
+    version="4.0.0",
+    lifespan=lifespan
+)
 
 # Enable CORS for frontend
 app.add_middleware(
