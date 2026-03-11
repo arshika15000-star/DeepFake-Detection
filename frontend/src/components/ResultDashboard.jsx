@@ -11,6 +11,7 @@ import {
     FileText,
     Workflow
 } from 'lucide-react';
+import FeedbackPanel from './FeedbackPanel';
 
 export default function ResultDashboard({ result, onReset }) {
     const isFake = result.prediction === 'FAKE';
@@ -167,6 +168,9 @@ export default function ResultDashboard({ result, onReset }) {
                     </div>
                 </div>
             </div>
+
+            {/* Feedback Section */}
+            <FeedbackPanel result={result} mediaType={result.frames_processed ? 'video' : 'image'} />
         </div>
     );
 }

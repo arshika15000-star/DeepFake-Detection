@@ -474,51 +474,32 @@ async def predict_image(file: UploadFile = File(...)):
         content = await file.read()
         img = Image.open(io.BytesIO(content)).convert('RGB')
         
-        # Face Detection for Image Prediction with Fallback
+        # Face Detection for Image Prediction
+        # Use Haar Cascade (reliable, no mediapipe dependency issues)
         img_np = np.array(img)
         face_bbox = None
         try:
-            import mediapipe as mp
-            try:
-                from mediapipe.python.solutions import face_detection as mp_face
-            except ImportError:
-                mp_face = mp.solutions.face_detection
-
-            with mp_face.FaceDetection(model_selection=1, min_detection_confidence=0.5) as face_detection:
-                results = face_detection.process(img_np)
-                if results.detections:
-                    bbox = results.detections[0].location_data.relative_bounding_box
-                    h_img, w_img, _ = img_np.shape
-                    x, y = int(bbox.xmin * w_img), int(bbox.ymin * h_img)
-                    box_w, box_h = int(bbox.width * w_img), int(bbox.height * h_img)
-                    
-                    padding = int(max(box_w, box_h) * 0.2)
-                    x1, y1 = max(0, x - padding), max(0, y - padding)
-                    x2, y2 = min(w_img, x + box_w + padding), min(h_img, y + box_h + padding)
-                    
-                    if x2 > x1 and y2 > y1:
-                        img_np = img_np[y1:y2, x1:x2]
-                        face_bbox = {"x": bbox.xmin, "y": bbox.ymin, "w": bbox.width, "h": bbox.height}
+            cascade_path = os.path.join(cv2.data.haarcascades, 'haarcascade_frontalface_default.xml')
+            haar_detector = cv2.CascadeClassifier(cascade_path)
+            gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+            # Try multiple scale factors for better detection
+            faces = haar_detector.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(60, 60))
+            if len(faces) == 0:
+                faces = haar_detector.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=3, minSize=(40, 40))
+            if len(faces) > 0:
+                (fx, fy, fw, fh) = faces[0]
+                h_img, w_img, _ = img_np.shape
+                padding = int(max(fw, fh) * 0.25)
+                x1, y1 = max(0, fx - padding), max(0, fy - padding)
+                x2, y2 = min(w_img, fx + fw + padding), min(h_img, fy + fh + padding)
+                if x2 > x1 and y2 > y1:
+                    img_np = img_np[y1:y2, x1:x2]
+                    face_bbox = {"x": fx/w_img, "y": fy/h_img, "w": fw/w_img, "h": fh/h_img}
+                    print(f"Face detected via Haar cascade at [{x1},{y1},{x2},{y2}]")
+            else:
+                print("No face detected — using full image for prediction")
         except Exception as e:
-            print(f"Mediapipe detection failed: {e}")
-            try:
-                cascade_path = os.path.join(cv2.data.haarcascades, 'haarcascade_frontalface_default.xml')
-                haar_detector = cv2.CascadeClassifier(cascade_path)
-                gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
-                faces = haar_detector.detectMultiScale(gray, 1.3, 5)
-                if len(faces) > 0:
-                    (fx, fy, fw, fh) = faces[0]
-                    h_img, w_img, _ = img_np.shape
-                    padding = int(max(fw, fh) * 0.2)
-                    x1, y1 = max(0, fx - padding), max(0, fy - padding)
-                    x2, y2 = min(w_img, fx + fw + padding), min(h_img, fy + fh + padding)
-                    if x2 > x1 and y2 > y1:
-                        img_np = img_np[y1:y2, x1:x2]
-                        face_bbox = {"x": fx/w_img, "y": fy/h_img, "w": fw/w_img, "h": fh/h_img}
-            except Exception as e:
-                print(f"Fallback detector failed: {e}")
-        except Exception as e:
-            print(f"Face detection info: {e}")
+            print(f"Face detection error: {e}")
 
         # Final transform (Resize and Normalize)
         tensor = image_transform(img_np).unsqueeze(0).to(DEVICE)
@@ -553,6 +534,7 @@ async def predict_image(file: UploadFile = File(...)):
         
         if os.path.exists(tmp_path): os.remove(tmp_path)
 
+        # Dataset labels: 0=REAL, 1=FAKE (from saakshigupta/deepfake-detection-dataset-v3)
         result = {
             "prediction": "FAKE" if pred == 1 else "REAL",
             "confidence": float(probs[pred].item()),
@@ -778,6 +760,67 @@ async def predict_text(current_text: str = Form(...)):
             "is_structured": True if score > 0.4 else False
         }
     })
+
+import json
+from datetime import datetime
+
+FEEDBACK_FILE = "feedback.json"
+
+@app.post("/submit_feedback")
+async def submit_feedback(
+    prediction_correct: str = Form(...),
+    actual_label: str = Form(default=""),
+    comments: str = Form(default=""),
+    media_type: str = Form(default="image"),
+    model_prediction: str = Form(default="")
+):
+    """Store user feedback about prediction accuracy"""
+    try:
+        entry = {
+            "timestamp": datetime.now().isoformat(),
+            "media_type": media_type,
+            "model_prediction": model_prediction,
+            "prediction_correct": prediction_correct == "true",
+            "actual_label": actual_label,
+            "comments": comments
+        }
+
+        existing = []
+        if os.path.exists(FEEDBACK_FILE):
+            with open(FEEDBACK_FILE, "r") as f:
+                try:
+                    existing = json.load(f)
+                except Exception:
+                    existing = []
+
+        existing.append(entry)
+        with open(FEEDBACK_FILE, "w") as f:
+            json.dump(existing, f, indent=2)
+
+        return JSONResponse(content={"status": "ok", "message": "Feedback recorded. Thank you!"})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/feedback_stats")
+async def get_feedback_stats():
+    """Return aggregated feedback statistics"""
+    try:
+        if not os.path.exists(FEEDBACK_FILE):
+            return JSONResponse(content={"total": 0, "correct": 0, "accuracy": 0})
+        with open(FEEDBACK_FILE, "r") as f:
+            data = json.load(f)
+        total = len(data)
+        correct = sum(1 for d in data if d.get("prediction_correct"))
+        return JSONResponse(content={
+            "total": total,
+            "correct": correct,
+            "accuracy": round(correct / total * 100, 1) if total > 0 else 0,
+            "entries": data[-10:]  # last 10
+        })
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 if __name__ == "__main__":
     print("Starting TruthLens API on http://127.0.0.1:8000")
