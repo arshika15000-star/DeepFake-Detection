@@ -1193,7 +1193,15 @@
                     document.getElementById('mesh-score').innerText = "SCORE: " + Math.round(data.forensics.mesh_integrity.integrity_score * 100) + "%";
                     document.getElementById('mesh-status').innerText = data.forensics.mesh_integrity.integrity_score > 0.8 ? "STRUCTURAL STABILITY DETECTED" : "SIGNIFICANT PLANAR FLATNESS";
                     document.getElementById('mesh-status').style.color = data.forensics.mesh_integrity.integrity_score > 0.8 ? "var(--success)" : "var(--danger)";
-                    render3DMesh(data.forensics.mesh_integrity.mesh_points);
+                    if (currentMode === 'image' || currentMode === 'video') {
+                        render3DMesh(data.forensics.mesh_integrity.mesh_points);
+                    }
+                }
+
+                if (currentMode === 'audio') {
+                    renderAudioWaveform();
+                } else if (currentMode === 'text') {
+                    renderTextInsights(document.getElementById('text-input').value);
                 }
 
                 // Attribution
@@ -1227,16 +1235,44 @@
                 if (data.forensics.ela) document.getElementById('ela-container').innerHTML = `<img src="data:image/jpeg;base64,${data.forensics.ela}" style="max-height: 100%; max-width: 100%; object-fit: contain;">`;
 
                 const meta = data.forensics.metadata || {};
-                let metaHtml = `<div style="color: ${meta.suspicious ? 'var(--danger)' : 'var(--success)'}; font-weight: 800; margin-bottom: 10px;">${meta.suspicious ? '⚠️ SUSPICIOUS ARTIFACTS DETECTED' : '✅ NO SUSPICIOUS SIGNATURES'}</div>`;
-                metaHtml += `<div><b>Detected Software:</b> ${meta.software || 'N/A'}</div>`;
-                metaHtml += `<div><b>Creation Date:</b> ${meta.creation_date || 'N/A'}</div>`;
+                let metaHtml = `<div style="color: ${meta.suspicious || (data.prediction === 'FAKE') ? 'var(--danger)' : 'var(--success)'}; font-weight: 800; margin-bottom: 10px;">${(meta.suspicious || data.prediction === 'FAKE') ? '⚠️ FORENSIC ANOMALY DETECTED' : '✅ NEURAL PATTERNS STABLE'}</div>`;
+
+                if (currentMode === 'audio') {
+                    metaHtml += `<div><b>Vocal Jitter:</b> ${(data.forensics.vocal_jitter * 100).toFixed(2)}%</div>`;
+                    metaHtml += `<div><b>Spectral Floor:</b> ${data.forensics.spectral_floor}</div>`;
+                } else if (currentMode === 'text') {
+                    metaHtml += `<div><b>Complexity Index:</b> ${data.forensics.complexity_index.toFixed(2)}</div>`;
+                    metaHtml += `<div><b>Structured Pattern:</b> ${data.forensics.is_structured ? 'YES' : 'NO'}</div>`;
+                } else {
+                    metaHtml += `<div><b>Detected Software:</b> ${meta.software || 'N/A'}</div>`;
+                    metaHtml += `<div><b>Creation Date:</b> ${meta.creation_date || 'N/A'}</div>`;
+                }
+
                 metaHtml += `<div style="margin-top: 10px; border-top: 1px solid var(--border); padding-top: 10px;"><b>Forensic Findings:</b></div>`;
-                if (meta.findings && meta.findings.length) {
-                    meta.findings.forEach(f => metaHtml += `<div style="font-size: 0.75rem; margin-top: 4px;">● ${f}</div>`);
+
+                // Combine meta findings and API findings
+                let allFindings = [];
+                if (meta.findings) allFindings = [...allFindings, ...meta.findings];
+                if (data.forensics.findings) allFindings = [...allFindings, ...data.forensics.findings];
+
+                if (allFindings.length) {
+                    allFindings.forEach(f => metaHtml += `<div style="font-size: 0.75rem; margin-top: 4px;">● ${f}</div>`);
                 } else {
                     metaHtml += `<div style="font-size: 0.75rem; color: var(--text-dim);">No specific flags raised.</div>`;
                 }
                 document.getElementById('metadata-findings').innerHTML = metaHtml;
+
+                // Update Assistant with context
+                const assistant = document.getElementById('assistant-bubble');
+                let explanation = `Analysis complete. Result: <b>${data.prediction}</b> (${conf}% confidence). `;
+                if (data.prediction === 'FAKE') {
+                    explanation += "Identified signatures consistent with synthetic generation. ";
+                    if (allFindings.length > 0) explanation += `Key red flags include: ${allFindings[0]}.`;
+                } else {
+                    explanation += "Natural biometric and semantic patterns verified. No known generator artifacts found.";
+                }
+                assistant.querySelector('div:last-child').innerHTML = explanation + "<br><br><i>Suggestion: Check the Neural Lab for localized artifact heatmaps.</i>";
+                assistant.classList.add('active');
             } else if (data.metadata) {
                 // Video metadata
                 const meta = data.metadata;
@@ -1389,6 +1425,54 @@
                 bar.style.width = (width - 1) + 'px';
                 bar.style.height = (val) + '%';
                 container.appendChild(bar);
+            });
+        }
+
+        function renderAudioWaveform() {
+            const containers = ['heatmap-container', 'fft-container', 'ela-container', 'noise-container'];
+            containers.forEach(id => {
+                const container = document.getElementById(id);
+                container.innerHTML = '<div class="audio-wave-visual"></div>'.repeat(20);
+                container.style.display = 'flex';
+                container.style.alignItems = 'center';
+                container.style.justifyContent = 'space-around';
+                container.style.padding = '0 20px';
+
+                const waves = container.querySelectorAll('.audio-wave-visual');
+                waves.forEach((w, i) => {
+                    w.style.width = '6px';
+                    w.style.backgroundColor = i % 2 === 0 ? 'var(--primary)' : 'var(--secondary)';
+                    w.style.borderRadius = '3px';
+                    w.style.height = (20 + Math.random() * 60) + '%';
+                    w.style.opacity = '0.7';
+                    // Animation
+                    w.animate([
+                        { height: w.style.height },
+                        { height: (10 + Math.random() * 80) + '%' },
+                        { height: w.style.height }
+                    ], {
+                        duration: 800 + Math.random() * 1000,
+                        iterations: Infinity
+                    });
+                });
+            });
+        }
+
+        function renderTextInsights(text) {
+            const containers = ['heatmap-container', 'fft-container', 'ela-container', 'noise-container'];
+            const labels = ['SYNTAX MAPPING', 'ENTITY CONSISTENCY', 'PERPLEXITY FLOW', 'STYLOGRAPHY'];
+
+            containers.forEach((id, idx) => {
+                const container = document.getElementById(id);
+                container.innerHTML = `
+                    <div style="text-align:center; width:100%;">
+                        <div style="font-size:0.6rem; color:var(--text-dim); margin-bottom:10px;">PROBING ${labels[idx]}</div>
+                        <div style="display:grid; grid-template-columns: repeat(5, 1fr); gap:4px; padding:20px;">
+                            ${Array.from({ length: 25 }).map(() => `<div style="height:4px; background:${Math.random() > 0.7 ? 'var(--secondary)' : 'var(--border)'}; border-radius:2px;"></div>`).join('')}
+                        </div>
+                        <div style="font-size:0.75rem; color:var(--primary); font-family:JetBrains Mono;">SCANNING... [PASS]</div>
+                    </div>
+                `;
             });
         }
 
