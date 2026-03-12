@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { Camera, X, Circle, Square, Mic, Volume2 } from 'lucide-react';
+import { Camera, X, Circle, Square, Mic } from 'lucide-react';
 
 export default function CaptureView({ modality, onCapture, onClose }) {
     const videoRef = useRef(null);
@@ -105,21 +105,21 @@ export default function CaptureView({ modality, onCapture, onClose }) {
     };
 
     return (
-        <div className="fixed inset-0 z-[100] bg-dark/95 backdrop-blur-3xl flex items-center justify-center p-6">
-            <div className="relative w-full max-w-4xl glass-morphism rounded-[3rem] border-primary/20 overflow-hidden shadow-2xl">
+        <div className="fixed inset-0 z-[100] backdrop-blur-3xl flex items-center justify-center p-6" style={{ background: 'var(--bg-card)' }}>
+            <div className="relative w-full max-w-4xl glass-morphism rounded-[3rem] overflow-hidden shadow-2xl" style={{ borderColor: 'var(--border-subtle)' }}>
                 {/* Header */}
-                <div className="p-6 flex justify-between items-center border-b border-white/5">
+                <div className="p-6 flex justify-between items-center border-b" style={{ borderColor: 'var(--border-subtle)' }}>
                     <div className="flex items-center gap-3">
-                        <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />
-                        <span className="text-xs font-black uppercase tracking-[0.3em] text-primary">Live Neural Capture</span>
+                        <div className="w-2 h-2 rounded-full animate-pulse" style={{ background: 'var(--primary)' }} />
+                        <span className="text-xs font-black uppercase tracking-[0.3em]" style={{ color: 'var(--primary)' }}>Live Neural Capture</span>
                     </div>
-                    <button onClick={onClose} className="p-2 hover:bg-white/5 rounded-full text-dim hover:text-white transition-all">
+                    <button onClick={onClose} className="p-2 rounded-full transition-all" style={{ color: 'var(--text-dim)', background: 'rgba(0,0,0,0.05)' }}>
                         <X size={20} />
                     </button>
                 </div>
 
                 {/* Viewport */}
-                <div className="relative aspect-video bg-black flex items-center justify-center">
+                <div className="relative aspect-video flex items-center justify-center" style={{ background: '#000' }}>
                     {modality !== 'audio' ? (
                         <video
                             ref={videoRef}
@@ -130,20 +130,21 @@ export default function CaptureView({ modality, onCapture, onClose }) {
                         />
                     ) : (
                         <div className="flex flex-col items-center gap-6">
-                            <div className="w-32 h-32 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center relative">
-                                <Mic className="text-primary" size={48} />
+                            <div className="w-32 h-32 rounded-full flex items-center justify-center relative shadow-lg" style={{ background: 'rgba(126,200,160,0.1)', borderColor: 'var(--primary)', borderWidth: '1px' }}>
+                                <Mic size={48} style={{ color: 'var(--primary)' }} />
                                 <motion.div
                                     animate={{ scale: [1, 1.2, 1] }}
                                     transition={{ repeat: Infinity, duration: 1.5 }}
                                     className="absolute inset-0 rounded-full border border-primary/30"
+                                    style={{ borderColor: 'var(--primary)' }}
                                 />
                             </div>
-                            <span className="text-dim text-sm font-bold uppercase tracking-widest">Audio Stream Active</span>
+                            <span className="text-sm font-bold uppercase tracking-widest" style={{ color: 'var(--text-dim)' }}>Audio Stream Active</span>
                         </div>
                     )}
 
                     {isRecording && (
-                        <div className="absolute top-6 left-6 flex items-center gap-2 px-3 py-1 rounded-full bg-danger/20 border border-danger/40">
+                        <div className="absolute top-6 left-6 flex items-center gap-2 px-3 py-1 rounded-full" style={{ background: 'rgba(251,113,133,0.2)', borderColor: 'rgba(251,113,133,0.4)', borderWidth: '1px' }}>
                             <div className="w-2 h-2 rounded-full bg-danger animate-ping" />
                             <span className="text-[10px] font-black uppercase tracking-widest text-danger">Recording...</span>
                         </div>
@@ -151,32 +152,38 @@ export default function CaptureView({ modality, onCapture, onClose }) {
                 </div>
 
                 {/* Controls */}
-                <div className="p-12 flex flex-col items-center gap-8 bg-gradient-to-t from-dark/50 to-transparent">
+                <div className="p-12 flex flex-col items-center gap-8" style={{ background: 'var(--bg-card)' }}>
                     {modality === 'image' ? (
                         <div className="flex flex-col items-center gap-4">
                             <button
                                 onClick={captureImage}
-                                className="w-24 h-24 rounded-full bg-white flex items-center justify-center text-dark hover:scale-110 transition-transform shadow-[0_0_40px_rgba(255,255,255,0.4)] border-4 border-primary/20"
+                                className="w-24 h-24 rounded-full flex items-center justify-center text-dark hover:scale-110 transition-transform shadow-[0_0_40px_rgba(255,255,255,0.4)] border-4"
+                                style={{ background: '#fff', borderColor: 'var(--border-subtle)', color: '#000' }}
                             >
                                 <Camera size={38} />
                             </button>
-                            <span className="text-sm font-black uppercase tracking-widest text-white">Snap & Analyze</span>
+                            <span className="text-sm font-black uppercase tracking-widest" style={{ color: 'var(--text-main)' }}>Snap & Analyze</span>
                         </div>
                     ) : (
                         <div className="flex flex-col items-center gap-4">
                             <button
                                 onClick={isRecording ? stopRecording : startRecording}
-                                className={`w-24 h-24 rounded-full flex items-center justify-center transition-all shadow-2xl border-4 ${isRecording ? 'bg-white text-dark scale-90 border-danger/20' : 'bg-danger text-white hover:scale-110 border-white/20'}`}
+                                className={`w-24 h-24 rounded-full flex items-center justify-center transition-all shadow-2xl border-4 ${isRecording ? 'scale-90 border-danger/20' : 'hover:scale-110 border-white/20'}`}
+                                style={{
+                                    background: isRecording ? '#fff' : 'var(--danger)',
+                                    color: isRecording ? 'var(--dark)' : '#fff',
+                                    borderColor: isRecording ? 'var(--danger)' : 'var(--border-subtle)'
+                                }}
                             >
-                                {isRecording ? <Square size={38} /> : <Circle size={38} fill="currentColor" />}
+                                {isRecording ? <Square size={38} color="var(--danger)" /> : <Circle size={38} fill="currentColor" />}
                             </button>
-                            <span className={`text-sm font-black uppercase tracking-widest ${isRecording ? 'text-danger animate-pulse' : 'text-white'}`}>
+                            <span className={`text-sm font-black uppercase tracking-widest ${isRecording ? 'text-danger animate-pulse' : ''}`} style={{ color: isRecording ? 'var(--danger)' : 'var(--text-main)' }}>
                                 {isRecording ? 'Stop Recording' : 'Start Feed Capture'}
                             </span>
                         </div>
                     )}
 
-                    <p className="text-dim text-xs font-bold uppercase tracking-widest opacity-40">
+                    <p className="text-xs font-bold uppercase tracking-widest" style={{ color: 'var(--text-dim)', opacity: 0.6 }}>
                         {modality === 'image' ? "Press to capture frame" : isRecording ? "Press to stop recording" : "Press to start stream capture"}
                     </p>
                 </div>
