@@ -65,21 +65,21 @@ def get_transforms(train=True):
 
 def build_model(num_classes=2, freeze_backbone=True):
     try:
-        # EfficientNet-V2-S is one of the best models for image classification
-        from torchvision.models import EfficientNet_V2_S_Weights
-        weights = EfficientNet_V2_S_Weights.DEFAULT
-        model = models.efficientnet_v2_s(weights=weights)
+        # Using ResNeXt50 for highly accurate image classification
+        from torchvision.models import ResNeXt50_32X4D_Weights
+        weights = ResNeXt50_32X4D_Weights.DEFAULT
+        model = models.resnext50_32x4d(weights=weights)
     except Exception:
-        model = models.efficientnet_v2_s(pretrained=True)
+        model = models.resnext50_32x4d(pretrained=True)
 
     if freeze_backbone:
         for param in model.parameters():
             param.requires_grad = False
 
     # Replace the classification head
-    # EfficientNetV2 classifier structure is Sequential(Dropout, Linear)
-    in_features = model.classifier[1].in_features
-    model.classifier[1] = nn.Linear(in_features, num_classes)
+    # ResNeXt50 uses an 'fc' (fully connected) layer for classification
+    in_features = model.fc.in_features
+    model.fc = nn.Linear(in_features, num_classes)
     
     return model.to(DEVICE)
 

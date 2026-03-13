@@ -434,15 +434,15 @@ async def predict_image(file: UploadFile = File(...)):
     try:
         # Build image model (EfficientNetV2-S for state-of-the-art accuracy)
         try:
-            from torchvision.models import EfficientNet_V2_S_Weights
-            weights = EfficientNet_V2_S_Weights.DEFAULT
-            image_model = models.efficientnet_v2_s(weights=weights)
+            from torchvision.models import ResNeXt50_32X4D_Weights
+            weights = ResNeXt50_32X4D_Weights.DEFAULT
+            image_model = models.resnext50_32x4d(weights=weights)
         except Exception:
-            image_model = models.efficientnet_v2_s(pretrained=True)
+            image_model = models.resnext50_32x4d(pretrained=True)
             
         # Replace the classification head to match 2 classes (Real/Fake)
-        in_features = image_model.classifier[1].in_features
-        image_model.classifier[1] = nn.Linear(in_features, 2)
+        in_features = image_model.fc.in_features
+        image_model.fc = nn.Linear(in_features, 2)
         image_model = image_model.to(DEVICE)
 
         # Try loading weights if available
@@ -512,8 +512,8 @@ async def predict_image(file: UploadFile = File(...)):
         # --- Explainability Step ---
         heatmap_b64 = None
         try:
-            # For EfficientNetV2-S, the last conv layer is often in model.features[-1]
-            target_layer = image_model.features[-1]
+            # For ResNeXt50, the last conv layer is layer4
+            target_layer = image_model.layer4[-1]
             gcam = GradCAM(image_model, target_layer)
             # Input needs gradients for backprop
             tensor_grad = tensor.clone().detach().requires_grad_(True)
