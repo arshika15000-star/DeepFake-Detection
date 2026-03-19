@@ -169,9 +169,21 @@ class DeepfakeDetector(nn.Module):
         for param in list(self.feature_extractor.parameters())[:-30]:
             param.requires_grad = False
         
-        # LSTM to process temporal information (EfficientNet-B1 feature size is 1280)
-        self.lstm = nn.LSTM(input_size=1280, hidden_size=256, num_layers=2, 
-                           batch_first=True, dropout=0.3)
+        # Temporal Model Options: LSTM (legacy) vs Transformer (2025/2026 SOTA)
+        self.use_transformer = True  # Flag to toggle between LSTM and Transformer
+        
+        if self.use_transformer:
+            # Transformer-based Temporal Fusion (Superior at capturing global dependencies)
+            encoder_layer = nn.TransformerEncoderLayer(
+                d_model=1280, nhead=8, dim_feedforward=2048, dropout=0.3, batch_first=True
+            )
+            self.temporal_model = nn.TransformerEncoder(encoder_layer, num_layers=2)
+            # We compress the 1280 features vector to 256 for the classifier
+            self.feature_reduction = nn.Linear(1280, 256)
+        else:
+            # Legacy LSTM Model
+            self.lstm = nn.LSTM(input_size=1280, hidden_size=256, num_layers=2, 
+                               batch_first=True, dropout=0.3)
         
         # Authenticity Classification head (Real vs Fake)
         self.classifier = nn.Sequential(
@@ -202,11 +214,16 @@ class DeepfakeDetector(nn.Module):
         features = self.avgpool(features)     # (batch*frames, 1280, 1, 1)
         features = features.view(batch_size, num_frames, -1)  # (batch, frames, 1280)
         
-        # Process temporal sequence with LSTM
-        lstm_out, _ = self.lstm(features)  # (batch, frames, 256)
-        
-        # Use the last LSTM output
-        last_output = lstm_out[:, -1, :]  # (batch, 256)
+        # Process temporal sequence
+        if self.use_transformer:
+            transformer_out = self.temporal_model(features) # (batch, frames, 1280)
+            # Use average pooling over time for transformers
+            last_output_high_dim = torch.mean(transformer_out, dim=1) # (batch, 1280)
+            last_output = self.feature_reduction(last_output_high_dim) # (batch, 256)
+        else:
+            lstm_out, _ = self.lstm(features)  # (batch, frames, 256)
+            # Use the last LSTM output
+            last_output = lstm_out[:, -1, :]  # (batch, 256)
         
         # Multi-task outputs
         authen_out = self.classifier(last_output)

@@ -63,23 +63,39 @@ def get_transforms(train=True):
             transforms.Normalize([0.485,0.456,0.406],[0.229,0.224,0.225])
         ])
 
-def build_model(num_classes=2, freeze_backbone=True):
-    try:
-        # Using ResNeXt50 for highly accurate image classification
-        from torchvision.models import ResNeXt50_32X4D_Weights
-        weights = ResNeXt50_32X4D_Weights.DEFAULT
-        model = models.resnext50_32x4d(weights=weights)
-    except Exception:
-        model = models.resnext50_32x4d(pretrained=True)
+def build_model(num_classes=2, freeze_backbone=True, use_vit=False):
+    if use_vit:
+        try:
+            from torchvision.models import ViT_B_16_Weights
+            weights = ViT_B_16_Weights.DEFAULT
+            model = models.vit_b_16(weights=weights)
+        except Exception:
+            model = models.vit_b_16(pretrained=True)
+            
+        if freeze_backbone:
+            for param in model.parameters():
+                param.requires_grad = False
+                
+        # Replace classification head for ViT
+        in_features = model.heads.head.in_features
+        model.heads.head = nn.Linear(in_features, num_classes)
+    else:
+        try:
+            # Using ResNeXt50
+            from torchvision.models import ResNeXt50_32X4D_Weights
+            weights = ResNeXt50_32X4D_Weights.DEFAULT
+            model = models.resnext50_32x4d(weights=weights)
+        except Exception:
+            model = models.resnext50_32x4d(pretrained=True)
 
-    if freeze_backbone:
-        for param in model.parameters():
-            param.requires_grad = False
+        if freeze_backbone:
+            for param in model.parameters():
+                param.requires_grad = False
 
-    # Replace the classification head
-    # ResNeXt50 uses an 'fc' (fully connected) layer for classification
-    in_features = model.fc.in_features
-    model.fc = nn.Linear(in_features, num_classes)
+        # Replace classification head
+        in_features = model.fc.in_features
+        model.fc = nn.Linear(in_features, num_classes)
+
     
     return model.to(DEVICE)
 
