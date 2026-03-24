@@ -20,19 +20,40 @@ export default function CaptureView({ modality, onCapture, onClose }) {
 
     const startStream = async () => {
         try {
-            const constraints = {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                throw new Error("Your browser does not support media devices. Make sure you are using localhost or HTTPS.");
+            }
+
+            const idealConstraints = {
                 video: modality === 'image' || modality === 'video' ? { facingMode: 'user' } : false,
                 audio: modality === 'audio' || modality === 'video' ? true : false,
             };
 
-            const newStream = await navigator.mediaDevices.getUserMedia(constraints);
+            let newStream;
+            try {
+                // Try ideal desktop/mobile constraints
+                newStream = await navigator.mediaDevices.getUserMedia(idealConstraints);
+            } catch (idealErr) {
+                console.warn("Ideal constraints failed, trying basic fallback...", idealErr);
+                // Fallback: Just request whatever camera is default
+                const basicConstraints = {
+                    video: modality === 'image' || modality === 'video' ? true : false,
+                    audio: modality === 'audio' || modality === 'video' ? true : false,
+                };
+                newStream = await navigator.mediaDevices.getUserMedia(basicConstraints);
+            }
+            
             setStream(newStream);
             if (videoRef.current) {
                 videoRef.current.srcObject = newStream;
             }
         } catch (err) {
             console.error("Error accessing media devices:", err);
-            alert("Neural Interface Error: Unable to access camera or microphone.");
+            let msg = "Unable to access camera or microphone.";
+            if (err.name === 'NotAllowedError') msg = "Permission denied. Please click the 🔒 icon in your browser URL bar and allow Camera/Microphone access.";
+            if (err.name === 'NotFoundError') msg = "No camera or microphone hardware found on this system.";
+            
+            alert(`Neural Interface Error: ${msg}\n\nTechnical details: ${err.message}`);
             onClose();
         }
     };
