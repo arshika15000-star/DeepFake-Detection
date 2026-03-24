@@ -1,9 +1,17 @@
+import os
+import sys
+
+# Allow imports from sibling directories
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _HERE)                                          # integration/
+sys.path.insert(0, os.path.join(_HERE, '..', 'backend'))          # backend/
+
 import torch
 import numpy as np
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
-from train_video import VideoFrameDataset, get_test_transforms, VIDEO_ROOT, DeepfakeDetector, FRAMES_PER_VIDEO
+from train_video import VideoFrameDataset, get_test_transforms, VIDEO_ROOT, FRAMES_PER_VIDEO
+from test_video_model import DeepfakeDetector
 from torch.utils.data import DataLoader
-import os
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

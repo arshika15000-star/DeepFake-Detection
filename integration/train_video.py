@@ -147,7 +147,9 @@ def get_test_transforms():
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
 
-# Import the exact same model architecture that app.py uses
+# Import the canonical model architecture from backend/
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'backend'))
 from test_video_model import DeepfakeDetector
 
 def parse_emotion_from_filename(filename):
