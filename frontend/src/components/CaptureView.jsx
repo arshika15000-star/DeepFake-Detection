@@ -35,12 +35,27 @@ export default function CaptureView({ modality, onCapture, onClose }) {
                 newStream = await navigator.mediaDevices.getUserMedia(idealConstraints);
             } catch (idealErr) {
                 console.warn("Ideal constraints failed, trying basic fallback...", idealErr);
-                // Fallback: Just request whatever camera is default
-                const basicConstraints = {
-                    video: modality === 'image' || modality === 'video' ? true : false,
-                    audio: modality === 'audio' || modality === 'video' ? true : false,
-                };
-                newStream = await navigator.mediaDevices.getUserMedia(basicConstraints);
+                // Fallback 1: Just request generic default hardware
+                try {
+                    const basicConstraints = {
+                        video: modality === 'image' || modality === 'video' ? true : false,
+                        audio: modality === 'audio' || modality === 'video' ? true : false,
+                    };
+                    newStream = await navigator.mediaDevices.getUserMedia(basicConstraints);
+                } catch (basicErr) {
+                    console.warn("Basic combined fallback failed, attempting extreme isolation...", basicErr);
+                    // Fallback 2: Extreme isolation (maybe they lack a mic, but have a camera, or vice versa)
+                    if (modality === 'video') {
+                        // User wants video, but maybe audio mic is missing. Try video ONLY.
+                        newStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+                        console.warn("Recovered by capturing Video-Only (No microphone detected).");
+                    } else if (modality === 'audio') {
+                        // Try audio only without any complex params
+                        newStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    } else {
+                        throw basicErr;
+                    }
+                }
             }
             
             setStream(newStream);
