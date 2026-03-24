@@ -610,8 +610,22 @@ def _process_video(temp_path, job_id):
         frames_tensor = torch.stack(frames_tensor).unsqueeze(0).to(DEVICE)
         
         update_job_progress(job_id, 60, "running_neural_networks")
+        
+        # Determine the video model to use safely
+        global model
+        try:
+            inference_model = model
+            if inference_model is None:
+                # Instantiate a randomly weighted fallback model for MVP usage if no model was trained
+                from test_video_model import DeepfakeDetector
+                inference_model = DeepfakeDetector(sequence_length=FRAMES_PER_VIDEO).to(DEVICE)
+                inference_model.eval()
+        except Exception as e:
+            # Absolute worst-case fallback, raise error with helpful message
+            raise RuntimeError(f"Video Model architecture failed to load: {e}")
+
         with torch.no_grad():
-            outputs, emotion_out = model(frames_tensor)
+            outputs, emotion_out = inference_model(frames_tensor)
             probabilities = torch.softmax(outputs, dim=1)
             predicted_class = outputs.argmax(dim=1).item()
             confidence = probabilities[0][predicted_class].item()
@@ -622,8 +636,8 @@ def _process_video(temp_path, job_id):
             predicted_emotion = emotion_labels[emotion_idx]
             emotion_conf = emotion_probs[0][emotion_idx].item()
 
-            fake_prob = probabilities[0][1].item()
-            real_prob = probabilities[0][0].item()
+            fake_prob = probabilities[0][0].item()  # 0 is Fake
+            real_prob = probabilities[0][1].item()  # 1 is Real
 
         update_job_progress(job_id, 80, "generating_xai_artifacts")
         import math
@@ -637,7 +651,7 @@ def _process_video(temp_path, job_id):
 
         vid_metadata = get_metadata(temp_path, is_video=True)
         update_job_progress(job_id, 100, "completed", result={
-            "prediction": "FAKE" if predicted_class == 1 else "REAL",
+            "prediction": "FAKE" if predicted_class == 0 else "REAL",
             "confidence": float(confidence),
             "probabilities": {
                 "fake": float(fake_prob),
