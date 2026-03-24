@@ -4,7 +4,7 @@ import cv2
 import torch
 import numpy as np
 import tempfile
-from fastapi import FastAPI, File, UploadFile, HTTPException, Form
+from fastapi import FastAPI, File, UploadFile, HTTPException, Form, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from torchvision import transforms
@@ -12,6 +12,9 @@ from PIL import Image
 import uvicorn
 import io
 import time
+import base64
+import uuid
+import asyncio
 import base64
 from torchvision.models import efficientnet_v2_s, EfficientNet_V2_S_Weights
 import torch.nn.functional as F
@@ -27,9 +30,12 @@ import torch.nn as nn
 
 from contextlib import asynccontextmanager
 
-# Global variables for model and transform
+# Global variables for model and transforms
 model = None
 transform = None
+
+# Job tracking
+jobs = {}
 
 def load_model():
     """Load the video model on startup"""
@@ -294,7 +300,9 @@ def predict_generator_source(img_np):
 
 def analyze_3d_mesh_integrity(img_np):
     """Uses Mediapipe Face Mesh to detect 'flattening' artifacts common in 2D deepfakes"""
-    results = {"integrity_score": 0.95, "findings": [], "mesh_points": []}
+    score = 0.95
+    findings = []
+    mesh_points = []
     try:
         import mediapipe as mp
         mp_mesh = mp.solutions.face_mesh
@@ -302,25 +310,22 @@ def analyze_3d_mesh_integrity(img_np):
             res = face_mesh.process(img_np)
             if res.multi_face_landmarks:
                 landmarks = res.multi_face_landmarks[0].landmark
-                # Heuristic: Check variance in Z-depth of nose relative to eyes (Detects 2D warp)
                 z_depths = [lm.z for lm in landmarks]
                 z_var = np.var(z_depths)
                 
-                # Normal human faces have a certain depth variance. Deepfakes can be too flat.
                 if z_var < 0.001:
-                    results["integrity_score"] -= 0.3
-                    results["findings"].append("Abnormal face planar flatness detected")
+                    score -= 0.3
+                    findings.append("Abnormal face planar flatness detected")
                 
-                # Sample some points for UI visualization
                 for i in range(0, 468, 20):
-                    results["mesh_points"].append({"x": landmarks[i].x, "y": landmarks[i].y, "z": landmarks[i].z})
+                    mesh_points.append({"x": landmarks[i].x, "y": landmarks[i].y, "z": landmarks[i].z})
             else:
-                results["integrity_score"] = 0.0
-                results["findings"].append("No biometric mesh could be anchored")
+                score = 0.0
+                findings.append("No biometric mesh could be anchored")
     except Exception as e:
-        results["findings"].append(f"Mesh analysis failed: {str(e)}")
+        findings.append(f"Mesh analysis failed: {str(e)}")
     
-    return results
+    return {"integrity_score": score, "findings": findings, "mesh_points": mesh_points}
 
 
 app = FastAPI(
@@ -342,7 +347,32 @@ app.add_middleware(
 async def root():
     return {"status": "online", "message": "Deepfake Detection API is running"}
 
-def extract_frames_from_video(video_path, num_frames=10):
+@app.get("/health")
+async def health_check():
+    """Explicit healthcheck endpoint for system status"""
+    status = {
+        "status": "healthy",
+        "video_model_loaded": model is not None,
+        "audio_model_loaded": 'audio_model' in globals() and globals().get('audio_model') is not None,
+        "device": DEVICE if 'DEVICE' in globals() else "cpu",
+        "timestamp": datetime.now().isoformat()
+    }
+    return JSONResponse(status_code=200 if status["video_model_loaded"] else 206, content=status)
+
+@app.get("/job/{job_id}")
+async def get_job_status(job_id: str):
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return JSONResponse(content=jobs[job_id])
+
+def update_job_progress(job_id, progress, status="processing", result=None, error=None):
+    if job_id in jobs:
+        jobs[job_id]["progress"] = progress
+        jobs[job_id]["status"] = status
+        if result: jobs[job_id]["result"] = result
+        if error: jobs[job_id]["error"] = error
+
+def extract_frames_from_video(video_path, num_frames=10, job_id=None):
     """Extract frames from video for inference, cropping to faces if detected"""
     frames = []
     cap = cv2.VideoCapture(video_path)
@@ -435,14 +465,11 @@ def extract_frames_from_video(video_path, num_frames=10):
     return frames[:num_frames], face_bbox
 
 
-@app.post("/predict_image")
-async def predict_image(file: UploadFile = File(...)):
-    if not file.filename.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp')):
-        raise HTTPException(status_code=400, detail="Invalid file format. Please upload an image file.")
-
-    # Lazy-load an image classification model separate from the video model
+def _process_image(content, filename, job_id):
     try:
-        # Build image model (EfficientNetV2-S for state-of-the-art accuracy)
+        update_job_progress(job_id, 10, "verifying_format")
+        
+        # Lazy-load an image classification model separate from the video model
         try:
             from torchvision.models import ResNeXt50_32X4D_Weights
             weights = ResNeXt50_32X4D_Weights.DEFAULT
@@ -450,12 +477,10 @@ async def predict_image(file: UploadFile = File(...)):
         except Exception:
             image_model = models.resnext50_32x4d(pretrained=True)
             
-        # Replace the classification head to match 2 classes (Real/Fake)
         in_features = image_model.fc.in_features
         image_model.fc = nn.Linear(in_features, 2)
         image_model = image_model.to(DEVICE)
 
-        # Try loading weights if available
         image_model_path = "deepfake_model_best.pth"
         if not os.path.exists(image_model_path):
             image_model_path = "deepfake_model_final.pth"
@@ -463,15 +488,15 @@ async def predict_image(file: UploadFile = File(...)):
         if os.path.exists(image_model_path):
             try:
                 ck = torch.load(image_model_path, map_location=DEVICE)
-                # support either state_dict or wrapped checkpoint
-                if isinstance(ck, dict) and 'model_state_dict' in ck:
-                    image_model.load_state_dict(ck['model_state_dict'])
-                else:
-                    image_model.load_state_dict(ck)
-                print(f"Loaded image model weights from {image_model_path}")
+                # Ignore type checking here for Pyre 
+                state_dict = ck
+                if type(ck) is dict and 'model_state_dict' in ck: # type: ignore
+                    state_dict = ck['model_state_dict'] # type: ignore
+                image_model.load_state_dict(state_dict)
             except Exception as e:
                 print(f"Warning: could not load image model weights: {e}")
 
+        update_job_progress(job_id, 30, "analyzing_biometrics")
         image_model.eval()
         image_transform = transforms.Compose([
             transforms.ToPILImage(),
@@ -480,19 +505,15 @@ async def predict_image(file: UploadFile = File(...)):
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
 
-        # Read file bytes
-        content = await file.read()
         img = Image.open(io.BytesIO(content)).convert('RGB')
-        
-        # Face Detection for Image Prediction
-        # Use Haar Cascade (reliable, no mediapipe dependency issues)
         img_np = np.array(img)
         face_bbox = None
+        
+        update_job_progress(job_id, 50, "extracting_features")
         try:
             cascade_path = os.path.join(cv2.data.haarcascades, 'haarcascade_frontalface_default.xml')
             haar_detector = cv2.CascadeClassifier(cascade_path)
             gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
-            # Try multiple scale factors for better detection
             faces = haar_detector.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(60, 60))
             if len(faces) == 0:
                 faces = haar_detector.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=3, minSize=(40, 40))
@@ -505,34 +526,28 @@ async def predict_image(file: UploadFile = File(...)):
                 if x2 > x1 and y2 > y1:
                     img_np = img_np[y1:y2, x1:x2]
                     face_bbox = {"x": fx/w_img, "y": fy/h_img, "w": fw/w_img, "h": fh/h_img}
-                    print(f"Face detected via Haar cascade at [{x1},{y1},{x2},{y2}]")
-            else:
-                print("No face detected — using full image for prediction")
         except Exception as e:
             print(f"Face detection error: {e}")
 
-        # Final transform (Resize and Normalize)
         tensor = image_transform(img_np).unsqueeze(0).to(DEVICE)
 
+        update_job_progress(job_id, 70, "running_neural_networks")
         with torch.no_grad():
             outputs = image_model(tensor)
             probs = torch.softmax(outputs, dim=1)[0]
             pred = int(outputs.argmax(dim=1).item())
 
-        # --- Explainability Step ---
+        update_job_progress(job_id, 85, "generating_xai_artifacts")
         heatmap_b64 = None
         try:
-            # For ResNeXt50, the last conv layer is layer4
             target_layer = image_model.layer4[-1]
             gcam = GradCAM(image_model, target_layer)
-            # Input needs gradients for backprop
             tensor_grad = tensor.clone().detach().requires_grad_(True)
             heatmap = gcam.generate(tensor_grad, class_idx=pred)
             heatmap_b64 = overlay_heatmap(img_np, heatmap)
         except Exception as e:
             print(f"Grad-CAM failed: {e}")
 
-        # Save to temp file for metadata analysis
         with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
             tmp.write(content)
             tmp_path = tmp.name
@@ -544,95 +559,84 @@ async def predict_image(file: UploadFile = File(...)):
         
         if os.path.exists(tmp_path): os.remove(tmp_path)
 
-        # Dataset labels: 0=REAL, 1=FAKE (from saakshigupta/deepfake-detection-dataset-v3)
-        result = {
+        update_job_progress(job_id, 100, "completed", result={
             "prediction": "FAKE" if pred == 1 else "REAL",
             "confidence": float(probs[pred].item()),
             "probabilities": {
                 "fake": float(probs[1].item()),
                 "real": float(probs[0].item())
             },
-            "face_bbox": face_bbox if 'face_bbox' in locals() else None,
+            "face_bbox": face_bbox,
             "forensics": {
                 "heatmap": heatmap_b64,
                 "ela": ela_b64,
                 "fft": fft_b64,
                 "noise": noise_b64,
                 "metadata": metadata,
+                "findings": metadata.get("findings", []),
                 "source_attribution": predict_generator_source(img_np),
                 "mesh_integrity": analyze_3d_mesh_integrity(img_np)
             }
-        }
-
-        return JSONResponse(content=result)
-
+        })
     except Exception as e:
-        print(f"Error in image prediction: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        update_job_progress(job_id, 100, "failed", error=str(e))
 
-@app.post("/predict")
-async def predict_video(file: UploadFile = File(...)):
-    if not file.filename.endswith(('.mp4', '.avi', '.mov', '.mkv')):
-        raise HTTPException(status_code=400, detail="Invalid file format. Please upload a video file.")
-    
+@app.post("/predict_image")
+async def predict_image(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+    if not file.filename.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.webp')):
+        raise HTTPException(status_code=400, detail="Invalid file format. Please upload an image file.")
+
+    content = await file.read()
+    job_id = str(uuid.uuid4())
+    jobs[job_id] = {"status": "pending", "progress": 0}
+    background_tasks.add_task(_process_image, content, file.filename, job_id)
+    return JSONResponse(content={"job_id": job_id})
+
+def _process_video(temp_path, job_id):
     try:
-        # Save uploaded file properly
-        # Create a unique temporary file
-        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[1]) as temp_video:
-            # Read and write chunks to avoid memory issues with large files
-            shutil.copyfileobj(file.file, temp_video)
-            temp_path = temp_video.name
-            
-        print(f"Processing video: {temp_path}")
+        update_job_progress(job_id, 10, "extracting_frames")
+        frames, face_bbox = extract_frames_from_video(temp_path, FRAMES_PER_VIDEO, job_id)
         
-        # Extract frames
-        frames, face_bbox = extract_frames_from_video(temp_path, FRAMES_PER_VIDEO)
-        
-        # Clean up temp file
         try:
             os.unlink(temp_path)
-        except Exception as e:
-            print(f"Error deleting temp file: {e}")
+        except Exception:
+            pass
             
         if not frames:
-            raise HTTPException(status_code=400, detail="Could not extract frames from video")
+            raise ValueError("Could not extract frames from video")
             
-        # Transform and Inference
+        update_job_progress(job_id, 40, "analyzing_biometrics")
         frames_tensor = [transform(frame) for frame in frames]
         frames_tensor = torch.stack(frames_tensor).unsqueeze(0).to(DEVICE)
         
+        update_job_progress(job_id, 60, "running_neural_networks")
         with torch.no_grad():
             outputs, emotion_out = model(frames_tensor)
             probabilities = torch.softmax(outputs, dim=1)
             predicted_class = outputs.argmax(dim=1).item()
             confidence = probabilities[0][predicted_class].item()
             
-            # Emotion Analysis (Multi-task)
             emotion_probs = torch.softmax(emotion_out, dim=1)
             emotion_idx = emotion_out.argmax(dim=1).item()
             emotion_labels = ["Angry", "Disgust", "Fear", "Happy", "Neutral", "Sad", "Surprise"]
             predicted_emotion = emotion_labels[emotion_idx]
             emotion_conf = emotion_probs[0][emotion_idx].item()
 
-            # Get probabilities for both classes
             fake_prob = probabilities[0][1].item()
             real_prob = probabilities[0][0].item()
 
-        # Generate simulated Neural Pulse (rPPG) data
+        update_job_progress(job_id, 80, "generating_xai_artifacts")
         import math
         pulse_data = []
-        base_hr = 70 + (np.random.random() * 10) # Base heart rate
-        
         for i in range(50):
-            if predicted_class == 0: # REAL
-                # Rhythmic sine wave with slight noise
+            if predicted_class == 0:
                 val = math.sin(i * 0.4) * 10 + 50 + (np.random.random() * 2)
-            else: # FAKE
-                # Erratic or flat
+            else:
                 val = (np.random.random() * 30) if np.random.random() > 0.3 else 50
             pulse_data.append(float(val))
 
-        result = {
+        vid_metadata = get_metadata(temp_path, is_video=True)
+        update_job_progress(job_id, 100, "completed", result={
             "prediction": "FAKE" if predicted_class == 1 else "REAL",
             "confidence": float(confidence),
             "probabilities": {
@@ -646,36 +650,42 @@ async def predict_video(file: UploadFile = File(...)):
             "frames_processed": len(frames),
             "face_bbox": face_bbox,
             "pulse_data": pulse_data,
-            # Research-based metrics from the "Brain Responses" paper
-            "neural_metrics": {
-                "emotional_genuineness": 0.92 - (fake_prob * 0.6) + (np.random.random() * 0.08),
-                "temporal_coherence": 0.95 - (fake_prob * 0.7) + (np.random.random() * 0.05),
-                "intensity_jitter": 0.88 - (fake_prob * 0.5) + (np.random.random() * 0.1),
-                "av_sync_stability": 0.98 - (fake_prob * 0.4) + (np.random.random() * 0.02)
-            },
-            "metadata": get_metadata(temp_path, is_video=True)
-        }
-        
-        return JSONResponse(content=result)
-        
+            "forensics": {
+                "neural_metrics": {
+                    "emotional_genuineness": 0.92 - (fake_prob * 0.6) + (np.random.random() * 0.08),
+                    "temporal_coherence": 0.95 - (fake_prob * 0.7) + (np.random.random() * 0.05),
+                    "intensity_jitter": 0.88 - (fake_prob * 0.5) + (np.random.random() * 0.1),
+                    "av_sync_stability": 0.98 - (fake_prob * 0.4) + (np.random.random() * 0.02)
+                },
+                "metadata": vid_metadata,
+                "findings": vid_metadata.get("findings", [])
+            }
+        })
     except Exception as e:
-        print(f"Error processing upload: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        update_job_progress(job_id, 100, "failed", error=str(e))
 
-@app.post("/predict_audio")
-async def predict_audio(file: UploadFile = File(...)):
-    """2025/2026 SOTA Neural Audio Deepfake Detection (Wav2Vec)"""
-    import numpy as np
-    import torchaudio
-    import torch
+@app.post("/predict")
+async def predict_video(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+    if not file.filename.endswith(('.mp4', '.avi', '.mov', '.mkv', '.webm')):
+        raise HTTPException(status_code=400, detail="Invalid file format. Please upload a video file.")
     
-    if not file.filename.lower().endswith(('.wav', '.mp3', '.m4a', '.flac')):
-        raise HTTPException(status_code=400, detail="Invalid audio format.")
-
-    try:
-        content = await file.read()
+    with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[1]) as temp_video:
+        import shutil
+        shutil.copyfileobj(file.file, temp_video)
+        temp_path = temp_video.name
         
-        # Save temp audio file to load with torchaudio
+    job_id = str(uuid.uuid4())
+    jobs[job_id] = {"status": "pending", "progress": 0}
+    background_tasks.add_task(_process_video, temp_path, job_id)
+    return JSONResponse(content={"job_id": job_id})
+
+def _process_audio(content, filename, job_id):
+    try:
+        update_job_progress(job_id, 20, "parsing_audio_stream")
+        import numpy as np
+        import torchaudio
+        import torch
+        
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
             tmp.write(content)
             tmp_path = tmp.name
@@ -684,32 +694,22 @@ async def predict_audio(file: UploadFile = File(...)):
         fake_prob = 0.5
         jitter_score = np.random.uniform(0.01, 0.05)
         
-        # Attempt Neural Extraction if Audio Extractor is running
+        update_job_progress(job_id, 50, "extracting_acoustic_features")
         if 'audio_model' in globals() and getattr(audio_model, 'use_wav2vec', False):
             waveform, sample_rate = torchaudio.load(tmp_path)
-            
-            # Resample to 16kHz for Wav2Vec if needed
             if sample_rate != 16000:
                 resampler = torchaudio.transforms.Resample(sample_rate, 16000)
                 waveform = resampler(waveform)
-            
-            # Mix down to mono if stereo
             if waveform.shape[0] > 1:
                 waveform = torch.mean(waveform, dim=0, keepdim=True)
                 
             waveform = waveform.to(DEVICE)
             
             with torch.no_grad():
-                # Forward pass through Wav2Vec layers
                 features = audio_model(waveform)
-                # Since we don't have a fully trained Multimodal Fusion on top yet, 
-                # we'll use the feature variance as an anomaly score. Synthetic voice
-                # typically has unnaturally smooth embeddings.
                 feature_variance = torch.var(features).item()
-                
-                # Dynamic Thresholding based on Wav2Vec behavior
                 if feature_variance < 0.005:  
-                    fake_prob += 0.35 # Highly suspicious, artificial smoothness
+                    fake_prob += 0.35
                     findings.append("Wav2Vec Neural Artifacts detected (Synthetic Voice signature)")
                     jitter_score = np.random.uniform(0.01, 0.03)
                 else:
@@ -717,20 +717,19 @@ async def predict_audio(file: UploadFile = File(...)):
                     findings.append("Natural Wav2Vec vocal tract variance confirmed")
                     jitter_score = np.random.uniform(0.1, 0.25)
         else:
-            # Fallback heuristic
-            if "ai" in file.filename.lower() or "fake" in file.filename.lower():
-                fake_prob += 0.3 # Metadata hint
+            if "ai" in filename.lower() or "fake" in filename.lower():
+                fake_prob += 0.3
                 findings.append("Suspicious filename metadata detected")
         
         if os.path.exists(tmp_path): os.remove(tmp_path)
 
-        # Boundary constraints
+        update_job_progress(job_id, 80, "generating_xai_artifacts")
         fake_prob = min(0.98, max(0.02, fake_prob))
         real_prob = 1.0 - fake_prob
         pred = "FAKE" if fake_prob > 0.5 else "REAL"
         confidence = fake_prob if pred == "FAKE" else real_prob
 
-        return JSONResponse(content={
+        update_job_progress(job_id, 100, "completed", result={
             "prediction": pred,
             "confidence": float(confidence),
             "probabilities": {"fake": float(fake_prob), "real": float(real_prob)},
@@ -741,58 +740,72 @@ async def predict_audio(file: UploadFile = File(...)):
             }
         })
     except Exception as e:
-        print(f"Audio analysis error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        update_job_progress(job_id, 100, "failed", error=str(e))
+
+@app.post("/predict_audio")
+async def predict_audio(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+    if not file.filename.lower().endswith(('.wav', '.mp3', '.m4a', '.flac', '.webm')):
+        raise HTTPException(status_code=400, detail="Invalid audio format.")
+
+    content = await file.read()
+    job_id = str(uuid.uuid4())
+    jobs[job_id] = {"status": "pending", "progress": 0}
+    background_tasks.add_task(_process_audio, content, file.filename, job_id)
+    return JSONResponse(content={"job_id": job_id})
+
+def _process_text(current_text, job_id):
+    try:
+        update_job_progress(job_id, 40, "analyzing_linguistics")
+        import re
+        formality_markers = ["furthermore", "moreover", "in conclusion", "it is important to note", "consequently"]
+        hedging_markers = ["it appears that", "it is possible", "one might consider"]
+        
+        score = 0.3
+        findings = []
+        
+        found_markers = [m for m in formality_markers if m in current_text.lower()]
+        if len(found_markers) > 1:
+            score += 0.2
+            findings.append(f"High formality markers detected: {', '.join(found_markers)}")
+            
+        personal_pronouns = ["i ", "me ", "my ", "mine"]
+        if not any(p in current_text.lower() for p in personal_pronouns):
+            score += 0.15
+            findings.append("Absence of personal narrative/subjectivity")
+            
+        sentences = re.split(r'[.!?]+', current_text)
+        if len(sentences) > 3:
+            starts = [s.strip()[:10].lower() for s in sentences if len(s.strip()) > 10]
+            if len(set(starts)) < len(starts) * 0.7:
+                score += 0.1
+                findings.append("Systemic structural repetition detected")
+
+        update_job_progress(job_id, 80, "generating_xai_artifacts")
+        fake_prob = min(0.95, max(0.05, score + (np.random.random() * 0.1)))
+        real_prob = 1.0 - fake_prob
+        pred = "FAKE" if fake_prob > 0.5 else "REAL"
+        confidence = fake_prob if pred == "FAKE" else real_prob
+
+        update_job_progress(job_id, 100, "completed", result={
+            "prediction": pred,
+            "confidence": float(confidence),
+            "probabilities": {"fake": float(fake_prob), "real": float(real_prob)},
+            "forensics": {
+                "findings": findings,
+                "complexity_index": len(current_text.split()) / (len(sentences) + 1),
+                "is_structured": True if score > 0.4 else False
+            }
+        })
+    except Exception as e:
+        update_job_progress(job_id, 100, "failed", error=str(e))
 
 @app.post("/predict_text")
-async def predict_text(current_text: str = Form(...)):
-    """Heuristic-based Text Deepfake/AI detection"""
-    import re
-    
-    # AI Text Markers
-    formality_markers = ["furthermore", "moreover", "in conclusion", "it is important to note", "consequently"]
-    hedging_markers = ["it appears that", "it is possible", "one might consider"]
-    
-    score = 0.3 # base uncertainty
-    findings = []
-    
-    # Rule 1: Formality Check
-    found_markers = [m for m in formality_markers if m in current_text.lower()]
-    if len(found_markers) > 1:
-        score += 0.2
-        findings.append(f"High formality markers detected: {', '.join(found_markers)}")
-        
-    # Rule 2: Lack of Personal Perspective
-    personal_pronouns = ["i ", "me ", "my ", "mine"]
-    if not any(p in current_text.lower() for p in personal_pronouns):
-        score += 0.15
-        findings.append("Absence of personal narrative/subjectivity")
-        
-    # Rule 3: Repetitive Structure
-    sentences = re.split(r'[.!?]+', current_text)
-    if len(sentences) > 3:
-        # Check if sentences start similarly
-        starts = [s.strip()[:10].lower() for s in sentences if len(s.strip()) > 10]
-        if len(set(starts)) < len(starts) * 0.7:
-            score += 0.1
-            findings.append("Systemic structural repetition detected")
+async def predict_text(background_tasks: BackgroundTasks, current_text: str = Form(...)):
+    job_id = str(uuid.uuid4())
+    jobs[job_id] = {"status": "pending", "progress": 0}
+    background_tasks.add_task(_process_text, current_text, job_id)
+    return JSONResponse(content={"job_id": job_id})
 
-    # Final Probability calculation
-    fake_prob = min(0.95, max(0.05, score + (np.random.random() * 0.1)))
-    real_prob = 1.0 - fake_prob
-    pred = "FAKE" if fake_prob > 0.5 else "REAL"
-    confidence = fake_prob if pred == "FAKE" else real_prob
-
-    return JSONResponse(content={
-        "prediction": pred,
-        "confidence": float(confidence),
-        "probabilities": {"fake": float(fake_prob), "real": float(real_prob)},
-        "forensics": {
-            "findings": findings,
-            "complexity_index": len(current_text.split()) / (len(sentences) + 1),
-            "is_structured": True if score > 0.4 else False
-        }
-    })
 
 import json
 from datetime import datetime

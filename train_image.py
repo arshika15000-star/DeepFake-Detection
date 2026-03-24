@@ -9,12 +9,15 @@ from sklearn.metrics import accuracy_score
 
 # Config
 BATCH_SIZE = 32
-BATCH_SIZE = 32
 NUM_EPOCHS = 3
 LEARNING_RATE = 1e-4
 IMAGE_SIZE = 224
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DATA_ROOT = os.path.join("dataset", "images")  # expects images/real and images/fake
+
+# Cap total samples per class when running on CPU to keep training fast.
+# Set to None to use the full dataset (recommended when GPU is available).
+MAX_SAMPLES_PER_CLASS = 3000 if not torch.cuda.is_available() else None
 
 def face_crop(image):
     """Detect and crop face from PIL image using mediapipe"""
@@ -63,39 +66,21 @@ def get_transforms(train=True):
             transforms.Normalize([0.485,0.456,0.406],[0.229,0.224,0.225])
         ])
 
-def build_model(num_classes=2, freeze_backbone=True, use_vit=False):
-    if use_vit:
-        try:
-            from torchvision.models import ViT_B_16_Weights
-            weights = ViT_B_16_Weights.DEFAULT
-            model = models.vit_b_16(weights=weights)
-        except Exception:
-            model = models.vit_b_16(pretrained=True)
-            
-        if freeze_backbone:
-            for param in model.parameters():
-                param.requires_grad = False
-                
-        # Replace classification head for ViT
-        in_features = model.heads.head.in_features
-        model.heads.head = nn.Linear(in_features, num_classes)
-    else:
-        try:
-            # Using ResNeXt50
-            from torchvision.models import ResNeXt50_32X4D_Weights
-            weights = ResNeXt50_32X4D_Weights.DEFAULT
-            model = models.resnext50_32x4d(weights=weights)
-        except Exception:
-            model = models.resnext50_32x4d(pretrained=True)
+def build_model(num_classes=2, freeze_backbone=True):
+    try:
+        from torchvision.models import ResNeXt50_32X4D_Weights
+        weights = ResNeXt50_32X4D_Weights.DEFAULT
+        model = models.resnext50_32x4d(weights=weights)
+    except Exception:
+        model = models.resnext50_32x4d(pretrained=True)
 
-        if freeze_backbone:
-            for param in model.parameters():
-                param.requires_grad = False
+    if freeze_backbone:
+        for param in model.parameters():
+            param.requires_grad = False
 
-        # Replace classification head
-        in_features = model.fc.in_features
-        model.fc = nn.Linear(in_features, num_classes)
-
+    # Replace classification head
+    in_features = model.fc.in_features
+    model.fc = nn.Linear(in_features, num_classes)
     
     return model.to(DEVICE)
 
@@ -105,12 +90,26 @@ def load_datasets(root=DATA_ROOT, val_fraction=0.2):
         return None, None
 
     full = datasets.ImageFolder(root, transform=get_transforms(train=True))
+
+    # Optionally cap samples per class for CPU training
+    if MAX_SAMPLES_PER_CLASS is not None:
+        from collections import defaultdict
+        class_indices = defaultdict(list)
+        for idx, (_, label) in enumerate(full.samples):
+            class_indices[label].append(idx)
+
+        capped_indices = []
+        for label, indices in class_indices.items():
+            capped_indices.extend(indices[:MAX_SAMPLES_PER_CLASS])
+
+        full = torch.utils.data.Subset(full, capped_indices)
+        print(f"[CPU Mode] Capped to {MAX_SAMPLES_PER_CLASS} samples/class → {len(full)} total images")
+    else:
+        print(f"[GPU Mode] Using full dataset: {len(full)} images")
+
     n_val = max(1, int(len(full) * val_fraction))
     n_train = len(full) - n_val
     train_ds, val_ds = random_split(full, [n_train, n_val])
-
-    # Replace transforms on validation subset
-    val_ds.dataset.transform = get_transforms(train=False)
 
     train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=0)
     val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=0)
@@ -183,14 +182,15 @@ def train():
             'model_state_dict': model.state_dict(),
             'val_acc': val_acc,
         }
-        torch.save(ck, f"deepfake_image_epoch_{epoch+1}.pth")
+        torch.save(ck, f"deepfake_model_epoch_{epoch+1}.pth")
 
         if val_acc > best_acc:
             best_acc = val_acc
-            torch.save(ck, "deepfake_image_best.pth")
+            torch.save(ck, "deepfake_model_best.pth")
 
+    torch.save(model.state_dict(), "deepfake_model_final.pth")
     total = time.time() - start
-    print(f"Image training completed in {total:.2f}s. Best val acc: {best_acc:.4f}")
+    print(f"Image training completed in {total:.2f}s. Best val acc: {best_acc:.4f}. Final model saved to deepfake_model_final.pth")
 
 if __name__ == '__main__':
     train()
