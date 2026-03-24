@@ -51,6 +51,7 @@ export default function App() {
   const [analysisResult, setAnalysisResult] = useState(null);
   const [isCaptureViewOpen, setIsCaptureViewOpen] = useState(false);
   const [selectedModality, setSelectedModality] = useState(null);
+  const [isDragging, setIsDragging] = useState(false);
 
   const [progress, setProgress] = useState({ percent: 0, status: 'initializing' });
 
@@ -133,9 +134,43 @@ export default function App() {
     startAnalysis(f, modality);
   };
 
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    if (!isDragging) setIsDragging(true);
+  };
+
+  const handleDragLeave = (e) => {
+    e.preventDefault();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const f = e.dataTransfer.files[0];
+    if (!f) return;
+    
+    // Auto-detect modality from mime type
+    if (f.type.startsWith('image/')) handleFileUpload({ target: { files: [f] } }, 'image');
+    else if (f.type.startsWith('video/')) handleFileUpload({ target: { files: [f] } }, 'video');
+    else if (f.type.startsWith('audio/')) handleFileUpload({ target: { files: [f] } }, 'audio');
+    else alert('❌ Unsupported file drop type. Please drop images, audio, or video files.');
+  };
+
   return (
-    <div className="min-h-screen relative overflow-hidden" style={{ backgroundColor: '#000', color: '#fff' }}>
+    <div 
+      className="min-h-screen relative overflow-hidden" 
+      style={{ backgroundColor: '#000', color: '#fff' }}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
       <StarBackground />
+      {isDragging && (
+        <div className="absolute inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm border-4 border-dashed border-[#7ec8a0]">
+          <h2 className="text-4xl font-bold text-[#7ec8a0] animate-pulse">Drop File to Analyze</h2>
+        </div>
+      )}
 
       {/* ─── NAVBAR (Matching Reference Image) ─── */}
       <nav className="relative z-50 flex items-center justify-between px-10 py-6">
@@ -238,6 +273,20 @@ export default function App() {
                   onClick={() => { setSelectedModality('image'); setIsCaptureViewOpen(true); }}
                 >
                   <Camera size={20} /> Live Snapshot
+                </button>
+                
+                <button 
+                  className="action-btn flex items-center gap-2"
+                  onClick={() => { setSelectedModality('video'); setIsCaptureViewOpen(true); }}
+                >
+                  <Camera size={20} /> Live Record Video
+                </button>
+                
+                <button 
+                  className="action-btn flex items-center gap-2"
+                  onClick={() => { setSelectedModality('audio'); setIsCaptureViewOpen(true); }}
+                >
+                  <Mic size={20} /> Live Record Audio
                 </button>
               </div>
 
