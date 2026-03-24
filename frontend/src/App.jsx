@@ -107,9 +107,30 @@ export default function App() {
     }
   };
 
+  const ALLOWED_TYPES = {
+    image: ['image/jpeg', 'image/png', 'image/webp', 'image/bmp'],
+    video: ['video/mp4', 'video/avi', 'video/quicktime', 'video/x-matroska', 'video/webm'],
+    audio: ['audio/wav', 'audio/mpeg', 'audio/mp4', 'audio/flac', 'audio/webm'],
+  };
+  const MAX_FILE_MB = { image: 10, video: 200, audio: 50 };
+
   const handleFileUpload = (e, modality) => {
     const f = e.target.files[0];
-    if (f) startAnalysis(f, modality);
+    if (!f) return;
+    const allowed = ALLOWED_TYPES[modality] || [];
+    const maxMB = MAX_FILE_MB[modality] || 100;
+    const sizeMB = f.size / (1024 * 1024);
+    if (!allowed.includes(f.type)) {
+      alert(`❌ Invalid file type for ${modality}.\nAllowed: ${allowed.map(t => t.split('/')[1].toUpperCase()).join(', ')}`);
+      e.target.value = '';
+      return;
+    }
+    if (sizeMB > maxMB) {
+      alert(`❌ File too large (${sizeMB.toFixed(1)} MB).\nMaximum allowed for ${modality}: ${maxMB} MB.`);
+      e.target.value = '';
+      return;
+    }
+    startAnalysis(f, modality);
   };
 
   return (
