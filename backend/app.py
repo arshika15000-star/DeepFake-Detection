@@ -560,11 +560,11 @@ def _process_image(content, filename, job_id):
         if os.path.exists(tmp_path): os.remove(tmp_path)
 
         update_job_progress(job_id, 100, "completed", result={
-            "prediction": "FAKE" if pred == 1 else "REAL",
+            "prediction": "FAKE" if pred == 0 else "REAL",
             "confidence": float(probs[pred].item()),
             "probabilities": {
-                "fake": float(probs[1].item()),
-                "real": float(probs[0].item())
+                "fake": float(probs[0].item()),
+                "real": float(probs[1].item())
             },
             "face_bbox": face_bbox,
             "forensics": {

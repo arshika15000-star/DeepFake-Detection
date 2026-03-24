@@ -200,94 +200,95 @@ export default function App() {
       <main className="relative z-10 w-full h-[85vh] flex items-center justify-center px-10">
         
         {view === 'home' && (
-          <div className="w-full max-w-7xl grid grid-cols-1 lg:grid-cols-2 gap-16 items-center">
+          <div className="w-full max-w-[90vw] flex flex-col items-center mt-10 space-y-12">
             
-            {/* LEFT SIDE: 3D Visualization */}
-            <div className="flex justify-center items-center">
-              <div 
-                className="relative w-80 h-96 border rounded-2xl flex items-center justify-center mesh-glow overflow-hidden" 
-                style={{ backgroundColor: 'rgba(20, 20, 20, 0.5)', borderColor: 'rgba(126, 200, 160, 0.3)' }}
-              >
-                {/* Simulated 3D Head background */}
-                <svg viewBox="0 0 100 100" className="absolute inset-0 w-full h-full opacity-30" style={{ color: '#7ec8a0' }}>
-                   <path fill="none" stroke="currentColor" strokeWidth="0.5" d="M30 20 Q50 0 70 20 T70 60 Q50 90 30 60 T30 20 M50 0 V90 M30 40 H70 M35 60 H65 M40 20 H60" />
-                   <circle cx="50" cy="40" r="4" fill="currentColor" className="animate-pulse" />
-                   <circle cx="35" cy="40" r="1.5" fill="currentColor" />
-                   <circle cx="65" cy="40" r="1.5" fill="currentColor" />
-                </svg>
-                {/* Scanning line */}
-                <div className="absolute top-0 left-0 right-0 h-1" style={{ background: '#7ec8a0', boxShadow: '0 0 15px #7ec8a0', animation: 'scan-line 3s linear infinite' }} />
-              </div>
+            <div className="text-center space-y-4">
+              <h1 className="text-5xl lg:text-7xl font-bold tracking-tight glow-text leading-tight">
+                Deepfake Intelligence
+              </h1>
+              <p className="text-xl text-gray-300 max-w-2xl mx-auto">
+                Select a modality to begin forensic analysis. Upload files or capture live data.
+              </p>
             </div>
 
-            {/* RIGHT SIDE: Text and Actions */}
-            <div className="text-left space-y-6">
-              {/* Glowing Blur Behind Text */}
-              <div className="absolute top-1/2 right-1/4 w-96 h-32 blur-[100px] pointer-events-none rounded-full" style={{ background: 'rgba(126, 200, 160, 0.25)' }} />
-
-              <h1 className="text-5xl lg:text-7xl font-bold tracking-tight glow-text leading-tight">
-                Deepfake Image & <br/> Video Detection
-              </h1>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-8 w-full pb-20">
               
-              <p className="text-lg text-gray-300 max-w-xl">
-                Using Deep Learning for forensic analysis and digital evidence validation.
-              </p>
+              {/* IMAGE COLUMN */}
+              <div className="glass-morphism rounded-3xl p-8 flex flex-col items-center text-center border transition-all hover:scale-105 hover:shadow-[0_0_30px_rgba(126,200,160,0.3)] shadow-xl relative overflow-hidden group" style={{ borderColor: 'rgba(126, 200, 160, 0.4)' }}>
+                <div className="absolute inset-0 bg-gradient-to-b from-[#7ec8a0]/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+                <UploadCloud size={48} className="text-[#7ec8a0] mb-4" />
+                <h2 className="text-2xl font-bold mb-2">Image</h2>
+                <p className="text-sm text-gray-400 mb-8 flex-1">
+                  Detect AI-generated faces, GAN artifacts, and manipulated pixels in photos.
+                </p>
+                <div className="w-full space-y-3 z-10">
+                  <button onClick={() => document.getElementById('image-upload').click()} className="w-full py-3 rounded-xl font-bold bg-[#7ec8a0] text-black hover:bg-[#6ab38c] transition-colors flex items-center justify-center gap-2">
+                    <UploadCloud size={18} /> Upload Image
+                  </button>
+                  <input id="image-upload" type="file" accept="image/*" className="hidden" onChange={(e) => handleFileUpload(e, 'image')} />
+                  <button onClick={() => { setSelectedModality('image'); setIsCaptureViewOpen(true); }} className="w-full py-3 rounded-xl font-bold border border-[#7ec8a0] text-[#7ec8a0] hover:bg-[#7ec8a0]/10 transition-colors flex items-center justify-center gap-2">
+                    <Camera size={18} /> Live Snapshot
+                  </button>
+                </div>
+              </div>
 
-              <div className="flex flex-wrap gap-4 pt-8">
-                <button 
-                  className="action-btn flex items-center gap-2"
-                  onClick={() => document.getElementById('video-upload').click()}
-                >
-                  <Play size={20} /> Analyze Video
-                </button>
-                <input id="video-upload" type="file" accept="video/*" className="hidden" onChange={(e) => handleFileUpload(e, 'video')} />
-                
-                <button 
-                  className="action-btn flex items-center gap-2"
-                  onClick={() => document.getElementById('image-upload').click()}
-                >
-                  <UploadCloud size={20} /> Upload Image
-                </button>
-                <input id="image-upload" type="file" accept="image/*" className="hidden" onChange={(e) => handleFileUpload(e, 'image')} />
+              {/* VIDEO COLUMN */}
+              <div className="glass-morphism rounded-3xl p-8 flex flex-col items-center text-center border transition-all hover:scale-105 hover:shadow-[0_0_30px_rgba(99,144,255,0.3)] shadow-xl relative overflow-hidden group" style={{ borderColor: 'rgba(99, 144, 255, 0.4)' }}>
+                <div className="absolute inset-0 bg-gradient-to-b from-[#6390ff]/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+                <Play size={48} className="text-[#6390ff] mb-4" />
+                <h2 className="text-2xl font-bold mb-2">Video</h2>
+                <p className="text-sm text-gray-400 mb-8 flex-1">
+                  Analyze temporal coherence, rPPG pulse, and frame-by-frame deepfake signatures.
+                </p>
+                <div className="w-full space-y-3 z-10">
+                  <button onClick={() => document.getElementById('video-upload').click()} className="w-full py-3 rounded-xl font-bold bg-[#6390ff] text-white hover:bg-[#4a72d1] transition-colors flex items-center justify-center gap-2">
+                    <UploadCloud size={18} /> Upload Video
+                  </button>
+                  <input id="video-upload" type="file" accept="video/*" className="hidden" onChange={(e) => handleFileUpload(e, 'video')} />
+                  <button onClick={() => { setSelectedModality('video'); setIsCaptureViewOpen(true); }} className="w-full py-3 rounded-xl font-bold border border-[#6390ff] text-[#6390ff] hover:bg-[#6390ff]/10 transition-colors flex items-center justify-center gap-2">
+                    <Camera size={18} /> Record Video
+                  </button>
+                </div>
+              </div>
 
-                <button 
-                  className="action-btn flex items-center gap-2"
-                  onClick={() => document.getElementById('audio-upload').click()}
-                >
-                  <Mic size={20} /> Analyze Audio
-                </button>
-                <input id="audio-upload" type="file" accept="audio/*" className="hidden" onChange={(e) => handleFileUpload(e, 'audio')} />
+              {/* AUDIO COLUMN */}
+              <div className="glass-morphism rounded-3xl p-8 flex flex-col items-center text-center border transition-all hover:scale-105 hover:shadow-[0_0_30px_rgba(255,144,99,0.3)] shadow-xl relative overflow-hidden group" style={{ borderColor: 'rgba(255, 144, 99, 0.4)' }}>
+                 <div className="absolute inset-0 bg-gradient-to-b from-[#ff9063]/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+                <Mic size={48} className="text-[#ff9063] mb-4" />
+                <h2 className="text-2xl font-bold mb-2">Audio</h2>
+                <p className="text-sm text-gray-400 mb-8 flex-1">
+                  Extract acoustic fingerprints and detect cloned or synthetic AI voices.
+                </p>
+                <div className="w-full space-y-3 z-10">
+                  <button onClick={() => document.getElementById('audio-upload').click()} className="w-full py-3 rounded-xl font-bold bg-[#ff9063] text-white hover:bg-[#e07548] transition-colors flex items-center justify-center gap-2">
+                    <UploadCloud size={18} /> Upload Audio
+                  </button>
+                  <input id="audio-upload" type="file" accept="audio/*" className="hidden" onChange={(e) => handleFileUpload(e, 'audio')} />
+                  <button onClick={() => { setSelectedModality('audio'); setIsCaptureViewOpen(true); }} className="w-full py-3 rounded-xl font-bold border border-[#ff9063] text-[#ff9063] hover:bg-[#ff9063]/10 transition-colors flex items-center justify-center gap-2">
+                    <Mic size={18} /> Record Audio
+                  </button>
+                </div>
+              </div>
 
-                <button 
-                  className="action-btn flex items-center gap-2"
-                  onClick={() => {
-                    const txt = prompt("Paste your text for semantic AI analysis:");
-                    if (txt) startAnalysis(txt, 'text');
-                  }}
-                >
-                  <Type size={20} /> Verify Text
-                </button>
-
-                <button 
-                  className="action-btn flex items-center gap-2"
-                  onClick={() => { setSelectedModality('image'); setIsCaptureViewOpen(true); }}
-                >
-                  <Camera size={20} /> Live Snapshot
-                </button>
-                
-                <button 
-                  className="action-btn flex items-center gap-2"
-                  onClick={() => { setSelectedModality('video'); setIsCaptureViewOpen(true); }}
-                >
-                  <Camera size={20} /> Live Record Video
-                </button>
-                
-                <button 
-                  className="action-btn flex items-center gap-2"
-                  onClick={() => { setSelectedModality('audio'); setIsCaptureViewOpen(true); }}
-                >
-                  <Mic size={20} /> Live Record Audio
-                </button>
+              {/* TEXT COLUMN */}
+              <div className="glass-morphism rounded-3xl p-8 flex flex-col items-center text-center border transition-all hover:scale-105 hover:shadow-[0_0_30px_rgba(200,126,255,0.3)] shadow-xl relative overflow-hidden group" style={{ borderColor: 'rgba(200, 126, 255, 0.4)' }}>
+                <div className="absolute inset-0 bg-gradient-to-b from-[#c87eff]/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+                <Type size={48} className="text-[#c87eff] mb-4" />
+                <h2 className="text-2xl font-bold mb-2">Text</h2>
+                <p className="text-sm text-gray-400 mb-8 flex-1">
+                  Evaluate linguistic syntax, perplexity, and AI generator writing patterns.
+                </p>
+                <div className="w-full space-y-3 z-10">
+                  <button onClick={() => {
+                      const txt = prompt("Paste your text for semantic AI analysis:");
+                      if (txt) startAnalysis(txt, 'text');
+                    }} className="w-full py-3 rounded-xl font-bold bg-[#c87eff] text-white hover:bg-[#a55cd9] transition-colors flex items-center justify-center gap-2">
+                    <Type size={18} /> Paste Text
+                  </button>
+                  <button onClick={() => {}} className="w-full py-3 rounded-xl font-bold border border-[#c87eff] text-[#c87eff] opacity-50 cursor-not-allowed flex items-center justify-center gap-2">
+                    <FileText size={18} /> Upload Document (Coming Soon)
+                  </button>
+                </div>
               </div>
 
             </div>
