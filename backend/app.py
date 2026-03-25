@@ -68,7 +68,7 @@ def load_model():
             model = DeepfakeDetector(num_frames=FRAMES_PER_VIDEO).to(DEVICE)
             model.eval()
             
-        # Also load the Audio model
+        
         global audio_model
         try:
             from multimodal_fusion import AudioExtractor
@@ -78,11 +78,14 @@ def load_model():
         except Exception as e:
             print(f"Could not load Audio Extractor: {e}")
             audio_model = None
-        
-        transform = get_transforms()
+            
     else:
         print(f"Warning: Model file not found at {model_path}")
-        print("API is running, but model-based predictions will not work until a model is available.")
+        print("API is running, but model-based predictions will use dynamic fallback architectures.")
+
+    # ALWAYS load transform, regardless of model weight existence
+    global transform
+    transform = get_transforms()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
