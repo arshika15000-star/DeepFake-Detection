@@ -9,8 +9,8 @@ from sklearn.metrics import accuracy_score
 
 # Config
 BATCH_SIZE = 32
-NUM_EPOCHS = 3
-LEARNING_RATE = 1e-4
+NUM_EPOCHS = 10
+LEARNING_RATE = 5e-5
 IMAGE_SIZE = 224
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DATA_ROOT = os.path.join("dataset", "images")  # expects images/real and images/fake
@@ -66,11 +66,11 @@ def get_transforms(train=True):
             transforms.Normalize([0.485,0.456,0.406],[0.229,0.224,0.225])
         ])
 
-def build_model(num_classes=2, freeze_backbone=True):
+def build_model(num_classes=2, freeze_backbone=False):
     try:
-        from torchvision.models import ResNeXt50_32X4D_Weights
-        weights = ResNeXt50_32X4D_Weights.DEFAULT
-        model = models.resnext50_32x4d(weights=weights)
+        from torchvision.models import efficientnet_v2_s, EfficientNet_V2_S_Weights
+        weights = EfficientNet_V2_S_Weights.DEFAULT
+        model = efficientnet_v2_s(weights=weights)
     except Exception:
         model = models.resnext50_32x4d(pretrained=True)
 
@@ -79,8 +79,12 @@ def build_model(num_classes=2, freeze_backbone=True):
             param.requires_grad = False
 
     # Replace classification head
-    in_features = model.fc.in_features
-    model.fc = nn.Linear(in_features, num_classes)
+    if hasattr(model, 'classifier'):
+        in_features = model.classifier[-1].in_features
+        model.classifier[-1] = nn.Linear(in_features, num_classes)
+    else:
+        in_features = model.fc.in_features
+        model.fc = nn.Linear(in_features, num_classes)
     
     return model.to(DEVICE)
 

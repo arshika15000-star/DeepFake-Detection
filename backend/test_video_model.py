@@ -18,20 +18,19 @@ class DeepfakeDetector(nn.Module):
     def __init__(self, num_frames=10):
         super(DeepfakeDetector, self).__init__()
         
-        # Using ResNet18 backbone to match your current video_model_best.pth (50MB)
-        # Note: If you want to use EfficientNet-B1, you must run train_video.py first 
-        # and then change this back to models.efficientnet_b1 and input_size=1280
-        base_model = models.resnet18(pretrained=True)
+        # Upgraded to ResNet50 and Bidirectional LSTM for higher accuracy
+        base_model = models.resnet50(pretrained=True)
         self.feature_extractor = nn.Sequential(*list(base_model.children())[:-2])
         self.avgpool = nn.AdaptiveAvgPool2d(1)
         
-        # ResNet18 outputs 512 features
-        self.lstm = nn.LSTM(input_size=512, hidden_size=256, num_layers=2, 
-                           batch_first=True, dropout=0.3)
+        # ResNet50 outputs 2048 features
+        self.lstm = nn.LSTM(input_size=2048, hidden_size=256, num_layers=2, 
+                           batch_first=True, dropout=0.3, bidirectional=True)
         
         # Authenticity Classification head (Real vs Fake)
         self.classifier = nn.Sequential(
-            nn.Linear(256, 128),
+            nn.Linear(512, 128),
+            nn.BatchNorm1d(128),
             nn.ReLU(),
             nn.Dropout(0.5),
             nn.Linear(128, 2)
@@ -40,7 +39,8 @@ class DeepfakeDetector(nn.Module):
         # Emotion Classification head (Multi-task tasking)
         # 7 Emotions: 0:Angry, 1:Disgust, 2:Fear, 3:Happy, 4:Neutral, 5:Sad, 6:Surprise
         self.emotion_classifier = nn.Sequential(
-            nn.Linear(256, 128),
+            nn.Linear(512, 128),
+            nn.BatchNorm1d(128),
             nn.ReLU(),
             nn.Dropout(0.3),
             nn.Linear(128, 7)
