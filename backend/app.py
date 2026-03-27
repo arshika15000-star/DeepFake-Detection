@@ -913,19 +913,73 @@ async def predict_text(background_tasks: BackgroundTasks, current_text: str = Fo
 
 # ─── URL ANALYSIS ENDPOINT ──────────────────────────────────────────────────
 
+def _download_with_ytdlp(url: str, job_id: str) -> str:
+    """Use yt-dlp to download a video from any supported site. Returns temp file path."""
+    import yt_dlp
+
+    # Create a temp file path for yt-dlp output
+    tmp_dir = tempfile.gettempdir()
+    out_template = os.path.join(tmp_dir, f"df_ytdlp_{job_id}.%(ext)s")
+
+    ydl_opts = {
+        'outtmpl': out_template,
+        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        'quiet': True,
+        'no_warnings': True,
+        'merge_output_format': 'mp4',
+        'postprocessors': [{
+            'key': 'FFmpegVideoConvertor',
+            'preferedformat': 'mp4',
+        }],
+        'socket_timeout': 30,
+    }
+
+    update_job_progress(job_id, 10, "downloading_with_ytdlp")
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+        fname = ydl.prepare_filename(info)
+
+    # yt-dlp may change the extension
+    base = os.path.splitext(fname)[0]
+    for ext in ['.mp4', '.mkv', '.webm', '.avi', '.mov']:
+        candidate = base + ext
+        if os.path.exists(candidate) and os.path.getsize(candidate) > 1000:
+            return candidate
+
+    # Also check original filename
+    if os.path.exists(fname) and os.path.getsize(fname) > 1000:
+        return fname
+
+    raise RuntimeError("yt-dlp download succeeded but output file not found.")
+
+
 def _process_url(url: str, modality: str, job_id: str):
     """Download media from URL and route through the existing processing pipeline."""
+    import requests as req_lib
+
     try:
-        import requests as req_lib
         update_job_progress(job_id, 5, "downloading_url")
 
-        # Validate URL
         if not url.startswith(('http://', 'https://')):
             raise ValueError("URL must start with http:// or https://")
 
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
+        # ── VIDEO: Try yt-dlp first (handles YouTube, Vimeo, Instagram, TikTok, etc.)
+        if modality in ('video', 'auto'):
+            try:
+                update_job_progress(job_id, 8, "detecting_video_source")
+                tmp_path = _download_with_ytdlp(url, job_id)
+                update_job_progress(job_id, 25, "routing_to_model")
+                _process_video(tmp_path, job_id)
+                return  # Done!
+            except Exception as ytdlp_err:
+                print(f"[yt-dlp] Failed for {url}: {ytdlp_err}. Falling back to direct download.")
+                # If modality was 'auto', continue to direct download below
+                if modality == 'video':
+                    # If user explicitly chose video but yt-dlp failed, try direct download
+                    pass
+
+        # ── DIRECT DOWNLOAD (images, audio, direct .mp4 CDN links)
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         response = req_lib.get(url, stream=True, timeout=30, headers=headers)
         response.raise_for_status()
 
@@ -934,8 +988,8 @@ def _process_url(url: str, modality: str, job_id: str):
 
         update_job_progress(job_id, 20, "routing_to_model")
 
-        # Auto-detect modality from content-type if not specified
-        if modality == 'auto':
+        # Auto-detect modality if still unknown
+        if modality in ('auto', 'video'):
             if 'image' in content_type:
                 modality = 'image'
             elif 'video' in content_type:
@@ -943,7 +997,6 @@ def _process_url(url: str, modality: str, job_id: str):
             elif 'audio' in content_type:
                 modality = 'audio'
             else:
-                # Guess from URL extension
                 url_lower = url.lower().split('?')[0]
                 if any(url_lower.endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif']):
                     modality = 'image'
@@ -952,12 +1005,18 @@ def _process_url(url: str, modality: str, job_id: str):
                 elif any(url_lower.endswith(ext) for ext in ['.wav', '.mp3', '.m4a', '.flac']):
                     modality = 'audio'
                 else:
-                    raise ValueError(f"Cannot detect media type from URL or content-type '{content_type}'. Please specify the modality.")
+                    raise ValueError(
+                        f"Could not detect media type from this URL. "
+                        f"Content-type received: '{content_type}'.\n\n"
+                        f"Supported: direct image/video/audio URLs, or streaming sites like YouTube, "
+                        f"Instagram, TikTok, Vimeo (video modality only)."
+                    )
 
         # Route to appropriate pipeline
         if modality == 'image':
             filename = url.split('/')[-1].split('?')[0] or 'url_image.jpg'
             _process_image(content, filename, job_id)
+
         elif modality == 'video':
             ext = '.mp4'
             for e in ['.webm', '.avi', '.mov', '.mkv']:
@@ -968,6 +1027,7 @@ def _process_url(url: str, modality: str, job_id: str):
                 tmp.write(content)
                 tmp_path = tmp.name
             _process_video(tmp_path, job_id)
+
         elif modality == 'audio':
             ext = '.wav'
             for e in ['.mp3', '.m4a', '.flac', '.webm']:
@@ -976,11 +1036,13 @@ def _process_url(url: str, modality: str, job_id: str):
                     break
             filename = url.split('/')[-1].split('?')[0] or 'url_audio.wav'
             _process_audio(content, filename, job_id)
+
         else:
             raise ValueError(f"Unsupported modality: {modality}")
 
     except Exception as e:
         update_job_progress(job_id, 100, "failed", error=f"URL Analysis Error: {str(e)}")
+
 
 @app.post("/predict_url")
 async def predict_from_url(
