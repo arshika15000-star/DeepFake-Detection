@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { Camera, X, Circle, Square, Mic } from 'lucide-react';
+import { Camera, X, Circle, Square, Mic, VideoOff } from 'lucide-react';
 
 export default function CaptureView({ modality, onCapture, onClose }) {
     const videoRef = useRef(null);
@@ -11,12 +11,16 @@ export default function CaptureView({ modality, onCapture, onClose }) {
 
     useEffect(() => {
         startStream();
-        return () => {
-            if (stream) {
-                stream.getTracks().forEach(track => track.stop());
-            }
-        };
+        return () => stopAllTracks();
     }, [modality]);
+
+    const stopAllTracks = () => {
+        // Access current stream via ref to avoid stale closures
+        if (videoRef.current && videoRef.current.srcObject) {
+            videoRef.current.srcObject.getTracks().forEach(track => track.stop());
+            videoRef.current.srcObject = null;
+        }
+    };
 
     const startStream = async () => {
         try {
@@ -31,11 +35,9 @@ export default function CaptureView({ modality, onCapture, onClose }) {
 
             let newStream;
             try {
-                // Try ideal desktop/mobile constraints
                 newStream = await navigator.mediaDevices.getUserMedia(idealConstraints);
             } catch (idealErr) {
                 console.warn("Ideal constraints failed, trying basic fallback...", idealErr);
-                // Fallback 1: Just request generic default hardware
                 try {
                     const basicConstraints = {
                         video: modality === 'image' || modality === 'video' ? true : false,
@@ -44,20 +46,17 @@ export default function CaptureView({ modality, onCapture, onClose }) {
                     newStream = await navigator.mediaDevices.getUserMedia(basicConstraints);
                 } catch (basicErr) {
                     console.warn("Basic combined fallback failed, attempting extreme isolation...", basicErr);
-                    // Fallback 2: Extreme isolation (maybe they lack a mic, but have a camera, or vice versa)
                     if (modality === 'video') {
-                        // User wants video, but maybe audio mic is missing. Try video ONLY.
                         newStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
                         console.warn("Recovered by capturing Video-Only (No microphone detected).");
                     } else if (modality === 'audio') {
-                        // Try audio only without any complex params
                         newStream = await navigator.mediaDevices.getUserMedia({ audio: true });
                     } else {
                         throw basicErr;
                     }
                 }
             }
-            
+
             setStream(newStream);
             if (videoRef.current) {
                 videoRef.current.srcObject = newStream;
@@ -67,10 +66,19 @@ export default function CaptureView({ modality, onCapture, onClose }) {
             let msg = "Unable to access camera or microphone.";
             if (err.name === 'NotAllowedError') msg = "Permission denied. Please click the 🔒 icon in your browser URL bar and allow Camera/Microphone access.";
             if (err.name === 'NotFoundError') msg = "No camera or microphone hardware found on this system.";
-            
+
             alert(`Neural Interface Error: ${msg}\n\nTechnical details: ${err.message}`);
             onClose();
         }
+    };
+
+    const handleStopCamera = () => {
+        // Stop any ongoing recording
+        if (mediaRecorderRef.current && isRecording) {
+            mediaRecorderRef.current.stop();
+        }
+        stopAllTracks();
+        onClose();
     };
 
     const captureImage = () => {
@@ -79,7 +87,6 @@ export default function CaptureView({ modality, onCapture, onClose }) {
             return;
         }
 
-        console.log("Capturing image from stream...");
         const canvas = document.createElement('canvas');
         canvas.width = videoRef.current.videoWidth;
         canvas.height = videoRef.current.videoHeight;
@@ -91,7 +98,7 @@ export default function CaptureView({ modality, onCapture, onClose }) {
                 console.error("Failed to generate blob from canvas");
                 return;
             }
-            console.log("Blob generated, size:", blob.size);
+            stopAllTracks();
             const file = new File([blob], "capture.jpg", { type: "image/jpeg" });
             onCapture(file);
         }, 'image/jpeg');
@@ -105,7 +112,6 @@ export default function CaptureView({ modality, onCapture, onClose }) {
 
         chunksRef.current = [];
 
-        // Find best supported mime type
         let mimeType = '';
         if (modality === 'audio') {
             mimeType = ['audio/webm', 'audio/mp4', 'audio/wav'].find(type => MediaRecorder.isTypeSupported(type));
@@ -126,6 +132,7 @@ export default function CaptureView({ modality, onCapture, onClose }) {
             const blob = new Blob(chunksRef.current, { type: recorder.mimeType || (modality === 'audio' ? 'audio/webm' : 'video/webm') });
             const filename = modality === 'audio' ? "capture.webm" : "capture.webm";
             const file = new File([blob], filename, { type: blob.type });
+            stopAllTracks();
             onCapture(file);
         };
 
@@ -149,8 +156,20 @@ export default function CaptureView({ modality, onCapture, onClose }) {
                         <div className="w-2 h-2 rounded-full animate-pulse" style={{ background: 'var(--primary)' }} />
                         <span className="text-xs font-black uppercase tracking-[0.3em]" style={{ color: 'var(--primary)' }}>Live Neural Capture</span>
                     </div>
-                    <button onClick={onClose} className="p-2 rounded-full transition-all" style={{ color: 'var(--text-dim)', background: 'rgba(0,0,0,0.05)' }}>
-                        <X size={20} />
+                    {/* Stop Camera Button */}
+                    <button
+                        onClick={handleStopCamera}
+                        id="stop-camera-btn"
+                        className="flex items-center gap-2 px-4 py-2 rounded-full font-bold text-sm transition-all hover:scale-105 active:scale-95"
+                        style={{
+                            background: 'rgba(251,113,133,0.15)',
+                            border: '1px solid rgba(251,113,133,0.5)',
+                            color: '#fb7185'
+                        }}
+                        title="Stop camera and close"
+                    >
+                        <VideoOff size={16} />
+                        Stop Camera
                     </button>
                 </div>
 
@@ -193,6 +212,7 @@ export default function CaptureView({ modality, onCapture, onClose }) {
                         <div className="flex flex-col items-center gap-4">
                             <button
                                 onClick={captureImage}
+                                id="capture-image-btn"
                                 className="w-24 h-24 rounded-full flex items-center justify-center text-dark hover:scale-110 transition-transform shadow-[0_0_40px_rgba(255,255,255,0.4)] border-4"
                                 style={{ background: '#fff', borderColor: 'var(--border-subtle)', color: '#000' }}
                             >
@@ -204,6 +224,7 @@ export default function CaptureView({ modality, onCapture, onClose }) {
                         <div className="flex flex-col items-center gap-4">
                             <button
                                 onClick={isRecording ? stopRecording : startRecording}
+                                id={isRecording ? 'stop-recording-btn' : 'start-recording-btn'}
                                 className={`w-24 h-24 rounded-full flex items-center justify-center transition-all shadow-2xl border-4 ${isRecording ? 'scale-90 border-danger/20' : 'hover:scale-110 border-white/20'}`}
                                 style={{
                                     background: isRecording ? '#fff' : 'var(--danger)',

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { Play, UploadCloud, Camera, Eye, FileText, Layers, ShieldCheck, AlertTriangle, Mic, Type } from 'lucide-react';
+import { Play, UploadCloud, Camera, Eye, FileText, Layers, ShieldCheck, AlertTriangle, Mic, Type, Link2, ArrowRight } from 'lucide-react';
 import ScannerView from './components/ScannerView';
 import CaptureView from './components/CaptureView';
 import ResultDashboard from './components/ResultDashboard';
@@ -52,6 +52,7 @@ export default function App() {
   const [isCaptureViewOpen, setIsCaptureViewOpen] = useState(false);
   const [selectedModality, setSelectedModality] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [urlInputs, setUrlInputs] = useState({ image: '', video: '', audio: '' });
 
   const [progress, setProgress] = useState({ percent: 0, status: 'initializing' });
 
@@ -104,6 +105,34 @@ export default function App() {
     } catch (err) {
       console.error(err);
       alert("Analysis Upload Failed: " + (err.response?.data?.detail || err.message));
+      setView('home');
+    }
+  };
+
+  const handleUrlAnalysis = async (modality) => {
+    const url = urlInputs[modality]?.trim();
+    if (!url) { alert('Please paste a URL first.'); return; }
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      alert('URL must start with http:// or https://');
+      return;
+    }
+    setSelectedModality(modality);
+    setView('scanning');
+    setProgress({ percent: 0, status: 'downloading_url' });
+    try {
+      const formData = new FormData();
+      formData.append('url', url);
+      formData.append('modality', modality);
+      const response = await axios.post(`${API_BASE}/predict_url`, formData);
+      if (response.data.job_id) {
+        pollJobStatus(response.data.job_id);
+      } else {
+        setAnalysisResult(response.data);
+        setView('result');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('URL Analysis Failed: ' + (err.response?.data?.detail || err.message));
       setView('home');
     }
   };
@@ -229,6 +258,19 @@ export default function App() {
                   <button onClick={() => { setSelectedModality('image'); setIsCaptureViewOpen(true); }} className="w-full py-3 rounded-xl font-bold border border-[#7ec8a0] text-[#7ec8a0] hover:bg-[#7ec8a0]/10 transition-colors flex items-center justify-center gap-2">
                     <Camera size={18} /> Live Snapshot
                   </button>
+                  <div className="flex gap-2">
+                    <input
+                      id="image-url-input"
+                      type="url"
+                      placeholder="Paste image URL…"
+                      value={urlInputs.image}
+                      onChange={e => setUrlInputs(p => ({ ...p, image: e.target.value }))}
+                      className="flex-1 px-3 py-2 rounded-xl text-sm bg-black/40 border border-[#7ec8a0]/30 text-white placeholder-gray-500 focus:outline-none focus:border-[#7ec8a0]"
+                    />
+                    <button onClick={() => handleUrlAnalysis('image')} className="px-3 py-2 rounded-xl bg-[#7ec8a0]/20 border border-[#7ec8a0]/40 text-[#7ec8a0] hover:bg-[#7ec8a0]/30 transition-colors" title="Analyze URL">
+                      <ArrowRight size={16} />
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -248,6 +290,19 @@ export default function App() {
                   <button onClick={() => { setSelectedModality('video'); setIsCaptureViewOpen(true); }} className="w-full py-3 rounded-xl font-bold border border-[#6390ff] text-[#6390ff] hover:bg-[#6390ff]/10 transition-colors flex items-center justify-center gap-2">
                     <Camera size={18} /> Record Video
                   </button>
+                  <div className="flex gap-2">
+                    <input
+                      id="video-url-input"
+                      type="url"
+                      placeholder="Paste video URL…"
+                      value={urlInputs.video}
+                      onChange={e => setUrlInputs(p => ({ ...p, video: e.target.value }))}
+                      className="flex-1 px-3 py-2 rounded-xl text-sm bg-black/40 border border-[#6390ff]/30 text-white placeholder-gray-500 focus:outline-none focus:border-[#6390ff]"
+                    />
+                    <button onClick={() => handleUrlAnalysis('video')} className="px-3 py-2 rounded-xl bg-[#6390ff]/20 border border-[#6390ff]/40 text-[#6390ff] hover:bg-[#6390ff]/30 transition-colors" title="Analyze URL">
+                      <ArrowRight size={16} />
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -267,6 +322,19 @@ export default function App() {
                   <button onClick={() => { setSelectedModality('audio'); setIsCaptureViewOpen(true); }} className="w-full py-3 rounded-xl font-bold border border-[#ff9063] text-[#ff9063] hover:bg-[#ff9063]/10 transition-colors flex items-center justify-center gap-2">
                     <Mic size={18} /> Record Audio
                   </button>
+                  <div className="flex gap-2">
+                    <input
+                      id="audio-url-input"
+                      type="url"
+                      placeholder="Paste audio URL…"
+                      value={urlInputs.audio}
+                      onChange={e => setUrlInputs(p => ({ ...p, audio: e.target.value }))}
+                      className="flex-1 px-3 py-2 rounded-xl text-sm bg-black/40 border border-[#ff9063]/30 text-white placeholder-gray-500 focus:outline-none focus:border-[#ff9063]"
+                    />
+                    <button onClick={() => handleUrlAnalysis('audio')} className="px-3 py-2 rounded-xl bg-[#ff9063]/20 border border-[#ff9063]/40 text-[#ff9063] hover:bg-[#ff9063]/30 transition-colors" title="Analyze URL">
+                      <ArrowRight size={16} />
+                    </button>
+                  </div>
                 </div>
               </div>
 

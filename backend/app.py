@@ -631,7 +631,7 @@ def _process_video(temp_path, job_id):
             if inference_model is None:
                 # Instantiate a randomly weighted fallback model for MVP usage if no model was trained
                 from test_video_model import DeepfakeDetector
-                inference_model = DeepfakeDetector(sequence_length=FRAMES_PER_VIDEO).to(DEVICE)
+                inference_model = DeepfakeDetector(num_frames=FRAMES_PER_VIDEO).to(DEVICE)
                 inference_model.eval()
         except Exception as e:
             # Absolute worst-case fallback, raise error with helpful message
@@ -905,6 +905,93 @@ async def predict_text(background_tasks: BackgroundTasks, current_text: str = Fo
     jobs[job_id] = {"status": "pending", "progress": 0}
     background_tasks.add_task(_process_text, current_text, job_id)
     return JSONResponse(content={"job_id": job_id})
+
+
+# ─── URL ANALYSIS ENDPOINT ──────────────────────────────────────────────────
+
+def _process_url(url: str, modality: str, job_id: str):
+    """Download media from URL and route through the existing processing pipeline."""
+    try:
+        import requests as req_lib
+        update_job_progress(job_id, 5, "downloading_url")
+
+        # Validate URL
+        if not url.startswith(('http://', 'https://')):
+            raise ValueError("URL must start with http:// or https://")
+
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        response = req_lib.get(url, stream=True, timeout=30, headers=headers)
+        response.raise_for_status()
+
+        content_type = response.headers.get('content-type', '').lower().split(';')[0].strip()
+        content = response.content
+
+        update_job_progress(job_id, 20, "routing_to_model")
+
+        # Auto-detect modality from content-type if not specified
+        if modality == 'auto':
+            if 'image' in content_type:
+                modality = 'image'
+            elif 'video' in content_type:
+                modality = 'video'
+            elif 'audio' in content_type:
+                modality = 'audio'
+            else:
+                # Guess from URL extension
+                url_lower = url.lower().split('?')[0]
+                if any(url_lower.endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif']):
+                    modality = 'image'
+                elif any(url_lower.endswith(ext) for ext in ['.mp4', '.avi', '.mov', '.mkv', '.webm']):
+                    modality = 'video'
+                elif any(url_lower.endswith(ext) for ext in ['.wav', '.mp3', '.m4a', '.flac']):
+                    modality = 'audio'
+                else:
+                    raise ValueError(f"Cannot detect media type from URL or content-type '{content_type}'. Please specify the modality.")
+
+        # Route to appropriate pipeline
+        if modality == 'image':
+            filename = url.split('/')[-1].split('?')[0] or 'url_image.jpg'
+            _process_image(content, filename, job_id)
+        elif modality == 'video':
+            ext = '.mp4'
+            for e in ['.webm', '.avi', '.mov', '.mkv']:
+                if url.lower().endswith(e):
+                    ext = e
+                    break
+            with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+                tmp.write(content)
+                tmp_path = tmp.name
+            _process_video(tmp_path, job_id)
+        elif modality == 'audio':
+            ext = '.wav'
+            for e in ['.mp3', '.m4a', '.flac', '.webm']:
+                if url.lower().endswith(e):
+                    ext = e
+                    break
+            filename = url.split('/')[-1].split('?')[0] or 'url_audio.wav'
+            _process_audio(content, filename, job_id)
+        else:
+            raise ValueError(f"Unsupported modality: {modality}")
+
+    except Exception as e:
+        update_job_progress(job_id, 100, "failed", error=f"URL Analysis Error: {str(e)}")
+
+@app.post("/predict_url")
+async def predict_from_url(
+    background_tasks: BackgroundTasks,
+    url: str = Form(...),
+    modality: str = Form(default='auto')
+):
+    """Analyze media from a public URL. Modality can be 'image', 'video', 'audio', or 'auto'."""
+    if not url or not url.startswith(('http://', 'https://')):
+        raise HTTPException(status_code=400, detail="Please provide a valid public URL starting with http:// or https://")
+
+    job_id = str(uuid.uuid4())
+    jobs[job_id] = {"status": "pending", "progress": 0}
+    background_tasks.add_task(_process_url, url, modality, job_id)
+    return JSONResponse(content={"job_id": job_id, "modality_detected": modality})
 
 
 import json
