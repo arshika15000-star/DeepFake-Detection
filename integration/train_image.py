@@ -9,8 +9,9 @@ from sklearn.metrics import accuracy_score
 
 # Config
 BATCH_SIZE = 32
-NUM_EPOCHS = 10
-LEARNING_RATE = 5e-5
+NUM_EPOCHS = 5
+MAX_STEPS_PER_EPOCH = 50   # Limit the number of batches per epoch to speed it up drastically
+LEARNING_RATE = 1e-3       # Increased learning rate for frozen backbone
 IMAGE_SIZE = 224
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DATA_ROOT = os.path.join("dataset", "images")  # expects images/real and images/fake
@@ -19,19 +20,24 @@ DATA_ROOT = os.path.join("dataset", "images")  # expects images/real and images/
 # Set to None to use the full dataset (recommended when GPU is available).
 MAX_SAMPLES_PER_CLASS = 3000 if not torch.cuda.is_available() else None
 
+_face_detector = None
+
 def face_crop(image):
     """Detect and crop face from PIL image using mediapipe"""
+    global _face_detector
     try:
         import mediapipe as mp
         import numpy as np
         import cv2
         from PIL import Image
         
+        if _face_detector is None:
+            mp_face_detection = mp.solutions.face_detection
+            _face_detector = mp_face_detection.FaceDetection(model_selection=1, min_detection_confidence=0.5)
+            
         img_np = np.array(image.convert('RGB'))
-        mp_face_detection = mp.solutions.face_detection
-        with mp_face_detection.FaceDetection(model_selection=1, min_detection_confidence=0.5) as face_detection:
-            results = face_detection.process(img_np)
-            if results.detections:
+        results = _face_detector.process(img_np)
+        if results.detections:
                 bbox = results.detections[0].location_data.relative_bounding_box
                 h, w, _ = img_np.shape
                 x, y = int(bbox.xmin * w), int(bbox.ymin * h)
@@ -125,7 +131,8 @@ def train():
     if train_loader is None:
         return
 
-    model = build_model()
+    # Freeze backbone to train ONLY the final layer (Transfer Learning). This is ~5-10x faster.
+    model = build_model(freeze_backbone=True)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=LEARNING_RATE)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=2)
@@ -140,7 +147,13 @@ def train():
         preds = []
         trues = []
 
-        for images, labels in train_loader:
+        for batch_idx, (images, labels) in enumerate(train_loader):
+            if batch_idx >= MAX_STEPS_PER_EPOCH:
+                break
+                
+            if batch_idx > 0 and batch_idx % 10 == 0:
+                print(f"  -> Batch {batch_idx}/{min(len(train_loader), MAX_STEPS_PER_EPOCH)} - Loss: {loss.item():.4f}")
+
             images = images.to(DEVICE)
             labels = labels.to(DEVICE)
             optimizer.zero_grad()
@@ -169,7 +182,9 @@ def train():
         v_preds = []
         v_trues = []
         with torch.no_grad():
-            for images, labels in val_loader:
+            for batch_idx, (images, labels) in enumerate(val_loader):
+                if batch_idx >= MAX_STEPS_PER_EPOCH // 2: # Evaluate fewer batches to save time
+                    break
                 images = images.to(DEVICE)
                 labels = labels.to(DEVICE)
                 outputs = model(images)
