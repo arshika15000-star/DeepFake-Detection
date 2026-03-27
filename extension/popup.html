@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>DeepFake Detector</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      width: 380px;
+      min-height: 480px;
+      background: #0a0a14;
+      color: #fff;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      overflow-x: hidden;
+    }
+
+    /* Header */
+    .header {
+      background: linear-gradient(135deg, rgba(126,200,160,0.15), rgba(99,144,255,0.08));
+      border-bottom: 1px solid rgba(126,200,160,0.2);
+      padding: 14px 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .logo {
+      width: 36px; height: 36px;
+      background: #7ec8a0;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 900; font-size: 12px; color: #000;
+      box-shadow: 0 0 12px rgba(126,200,160,0.5);
+    }
+    .header-text h1 { font-size: 15px; font-weight: 800; color: #7ec8a0; }
+    .header-text p { font-size: 10px; color: #888; letter-spacing: 0.05em; }
+
+    /* Status bar */
+    .status-bar {
+      padding: 8px 16px;
+      font-size: 11px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+    }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; }
+    .status-dot.online { background: #7ec8a0; box-shadow: 0 0 6px #7ec8a0; animation: pulse 2s infinite; }
+    .status-dot.offline { background: #fb7185; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+
+    /* Tabs */
+    .tabs {
+      display: flex;
+      border-bottom: 1px solid rgba(255,255,255,0.07);
+    }
+    .tab {
+      flex: 1; padding: 10px 4px; font-size: 11px; font-weight: 700;
+      text-align: center; cursor: pointer; letter-spacing: 0.05em;
+      text-transform: uppercase; color: #555; border: none;
+      background: transparent; transition: all 0.2s;
+      border-bottom: 2px solid transparent;
+    }
+    .tab.active { color: #7ec8a0; border-bottom-color: #7ec8a0; }
+    .tab:hover:not(.active) { color: #888; }
+
+    /* Content */
+    .content { padding: 16px; }
+    .section { display: none; }
+    .section.active { display: block; }
+
+    /* URL section */
+    .url-row { display: flex; gap: 8px; margin-bottom: 10px; }
+    .url-input {
+      flex: 1; background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(126,200,160,0.25);
+      border-radius: 10px; padding: 10px 12px;
+      color: #fff; font-size: 12px; outline: none;
+      transition: border-color 0.2s;
+    }
+    .url-input:focus { border-color: #7ec8a0; }
+    .url-input::placeholder { color: #555; }
+
+    .btn {
+      padding: 10px 16px; border-radius: 10px;
+      font-size: 12px; font-weight: 700; cursor: pointer;
+      border: none; transition: all 0.2s; display: flex; align-items: center; gap: 6px;
+    }
+    .btn-primary { background: #7ec8a0; color: #000; }
+    .btn-primary:hover { background: #6ab38c; transform: scale(1.03); }
+    .btn-secondary { background: rgba(126,200,160,0.12); color: #7ec8a0; border: 1px solid rgba(126,200,160,0.3); }
+    .btn-secondary:hover { background: rgba(126,200,160,0.2); }
+    .btn-full { width: 100%; justify-content: center; margin-bottom: 8px; }
+    .btn-danger { background: rgba(251,113,133,0.15); color: #fb7185; border: 1px solid rgba(251,113,133,0.3); }
+
+    /* Modality pills */
+    .pills { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
+    .pill {
+      padding: 5px 12px; border-radius: 20px; font-size: 11px; font-weight: 700;
+      cursor: pointer; border: 1px solid; transition: all 0.2s; text-transform: uppercase;
+    }
+    .pill.image { color: #7ec8a0; border-color: rgba(126,200,160,0.4); background: rgba(126,200,160,0.08); }
+    .pill.video { color: #6390ff; border-color: rgba(99,144,255,0.4); background: rgba(99,144,255,0.08); }
+    .pill.audio { color: #ff9063; border-color: rgba(255,144,99,0.4); background: rgba(255,144,99,0.08); }
+    .pill.active.image { background: rgba(126,200,160,0.25); }
+    .pill.active.video { background: rgba(99,144,255,0.25); }
+    .pill.active.audio { background: rgba(255,144,99,0.25); }
+
+    /* Result box */
+    .result-box {
+      border-radius: 14px; padding: 16px; margin-top: 12px;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.03);
+      display: none;
+    }
+    .result-box.show { display: block; }
+    .result-verdict {
+      font-size: 22px; font-weight: 900; text-align: center; margin-bottom: 8px;
+      letter-spacing: 0.1em;
+    }
+    .result-verdict.fake { color: #fb7185; text-shadow: 0 0 20px rgba(251,113,133,0.5); }
+    .result-verdict.real { color: #7ec8a0; text-shadow: 0 0 20px rgba(126,200,160,0.5); }
+    .result-bar { height: 6px; border-radius: 3px; background: rgba(255,255,255,0.1); overflow: hidden; margin-bottom: 8px; }
+    .result-fill { height: 100%; border-radius: 3px; transition: width 0.6s ease; }
+    .result-fill.fake { background: linear-gradient(90deg, #fb7185, #f43f5e); }
+    .result-fill.real { background: linear-gradient(90deg, #7ec8a0, #34d399); }
+    .result-meta { font-size: 11px; color: #888; text-align: center; }
+    .result-findings { margin-top: 10px; }
+    .finding-item { font-size: 11px; color: #aaa; padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.04); display: flex; align-items: flex-start; gap: 6px; }
+    .finding-item::before { content: "•"; color: #6390ff; flex-shrink: 0; }
+
+    /* Loading spinner */
+    .spinner {
+      width: 36px; height: 36px; border: 3px solid rgba(126,200,160,0.2);
+      border-top-color: #7ec8a0; border-radius: 50%;
+      animation: spin 0.8s linear infinite; margin: 20px auto;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .loading-box { text-align: center; padding: 20px 0; display: none; }
+    .loading-box.show { display: block; }
+    .loading-text { font-size: 12px; color: #888; margin-top: 8px; }
+    .progress-bar { height: 4px; background: rgba(255,255,255,0.08); border-radius: 2px; margin-top: 12px; overflow:hidden; }
+    .progress-fill { height: 100%; background: linear-gradient(90deg,#7ec8a0,#6390ff); border-radius:2px; transition: width 0.5s ease; }
+
+    .error-box {
+      background: rgba(251,113,133,0.08); border: 1px solid rgba(251,113,133,0.2);
+      border-radius: 10px; padding: 12px; font-size: 12px; color: #fb7185;
+      margin-top: 12px; display: none;
+    }
+    .error-box.show { display: block; }
+
+    /* Page capture section */
+    .page-images { max-height: 200px; overflow-y: auto; margin-top: 8px; }
+    .page-img-item {
+      display: flex; align-items: center; gap: 8px; padding: 6px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.04); cursor: pointer;
+      transition: background 0.15s; border-radius: 6px;
+    }
+    .page-img-item:hover { background: rgba(255,255,255,0.04); }
+    .page-img-thumb { width: 40px; height: 30px; object-fit: cover; border-radius: 4px; background: #222; flex-shrink: 0; }
+    .page-img-url { font-size: 10px; color: #aaa; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+    .page-img-btn { font-size: 10px; padding: 4px 8px; border-radius: 6px; background: rgba(126,200,160,0.1); color: #7ec8a0; border: 1px solid rgba(126,200,160,0.2); cursor: pointer; flex-shrink: 0; }
+    .page-img-btn:hover { background: rgba(126,200,160,0.2); }
+    .empty-state { text-align: center; color: #555; font-size: 12px; padding: 20px 0; }
+    .section-label { font-size: 10px; font-weight: 700; color: #555; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 8px; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="logo">DF</div>
+    <div class="header-text">
+      <h1>DeepFake Detector</h1>
+      <p>AI-POWERED FORENSIC ANALYSIS</p>
+    </div>
+  </div>
+
+  <div class="status-bar">
+    <div class="status-dot" id="status-dot"></div>
+    <span id="status-text" style="color:#888">Connecting to backend…</span>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" data-tab="url-tab">🔗 URL Analyze</button>
+    <button class="tab" data-tab="page-tab">📄 Page Images</button>
+    <button class="tab" data-tab="settings-tab">⚙️ Settings</button>
+  </div>
+
+  <div class="content">
+    <!-- URL TAB -->
+    <div class="section active" id="url-tab">
+      <div class="section-label">Media Type</div>
+      <div class="pills">
+        <div class="pill image active" data-modality="image">Image</div>
+        <div class="pill video" data-modality="video">Video</div>
+        <div class="pill audio" data-modality="audio">Audio</div>
+      </div>
+
+      <div class="url-row">
+        <input class="url-input" id="media-url" type="url" placeholder="Paste or enter media URL…" />
+        <button class="btn btn-primary" id="analyze-url-btn">Scan</button>
+      </div>
+      <button class="btn btn-secondary btn-full" id="use-page-url-btn">📋 Use Current Page URL</button>
+
+      <div class="loading-box" id="loading-box">
+        <div class="spinner"></div>
+        <div class="loading-text" id="loading-text">Analyzing…</div>
+        <div class="progress-bar"><div class="progress-fill" id="progress-fill" style="width:5%"></div></div>
+      </div>
+
+      <div class="error-box" id="error-box"></div>
+
+      <div class="result-box" id="result-box">
+        <div class="result-verdict" id="result-verdict"></div>
+        <div class="result-bar"><div class="result-fill" id="result-fill" style="width:0%"></div></div>
+        <div class="result-meta" id="result-meta"></div>
+        <div class="result-findings" id="result-findings"></div>
+        <button class="btn btn-danger btn-full" id="reset-btn" style="margin-top:12px">↩ New Analysis</button>
+      </div>
+    </div>
+
+    <!-- PAGE IMAGES TAB -->
+    <div class="section" id="page-tab">
+      <div class="section-label">Images on This Page</div>
+      <button class="btn btn-secondary btn-full" id="scan-page-btn">🔍 Scan Current Page</button>
+      <div class="page-images" id="page-images">
+        <div class="empty-state">Click "Scan Current Page" to find media</div>
+      </div>
+    </div>
+
+    <!-- SETTINGS TAB -->
+    <div class="section" id="settings-tab">
+      <div class="section-label">Backend URL</div>
+      <input class="url-input" id="backend-url-setting" style="width:100%;margin-bottom:10px" placeholder="http://127.0.0.1:8000" />
+      <button class="btn btn-primary btn-full" id="save-settings-btn">💾 Save Settings</button>
+      <div style="margin-top:16px;padding:12px;background:rgba(126,200,160,0.05);border-radius:10px;border:1px solid rgba(126,200,160,0.15)">
+        <p style="font-size:11px;color:#888;line-height:1.6">
+          <strong style="color:#7ec8a0">Note:</strong> This extension connects to your <strong>local backend</strong> running at http://127.0.0.1:8000.<br><br>
+          Make sure the backend is running:<br>
+          <code style="color:#6390ff;font-size:10px">cd backend && python app.py</code>
+        </p>
+      </div>
+      <div style="margin-top:12px;text-align:center">
+        <p style="font-size:10px;color:#555">DeepFake Detector v1.0.0</p>
+        <p style="font-size:10px;color:#555">Built with 💚 by Vanshika</p>
+      </div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

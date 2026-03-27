@@ -608,15 +608,19 @@ async def predict_image(background_tasks: BackgroundTasks, file: UploadFile = Fi
 def _process_video(temp_path, job_id):
     try:
         update_job_progress(job_id, 10, "extracting_frames")
-        frames, face_bbox = extract_frames_from_video(temp_path, FRAMES_PER_VIDEO, job_id)
-        
+        frame_result = extract_frames_from_video(temp_path, FRAMES_PER_VIDEO, job_id)
+
         try:
             os.unlink(temp_path)
         except Exception:
             pass
-            
+
+        if frame_result is None:
+            raise ValueError("Could not extract frames from this video. The file may be corrupted, empty, or a streaming URL (e.g. YouTube) that cannot be directly downloaded.")
+        frames, face_bbox = frame_result
+
         if not frames:
-            raise ValueError("Could not extract frames from video")
+            raise ValueError("No frames were extracted from the video.")
             
         update_job_progress(job_id, 40, "analyzing_biometrics")
         frames_tensor = [transform(frame) for frame in frames]
