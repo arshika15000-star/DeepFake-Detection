@@ -19,8 +19,10 @@ def main() -> None:
     print(f"Downloaded to: {path}")
 
     # ── 2. Create target folders ───────────────────────────────────────────────────
-    DEST_REAL = os.path.join("..", "dataset", "SDFVD", "SDFVD", "videos_real")
-    DEST_FAKE = os.path.join("..", "dataset", "SDFVD", "SDFVD", "videos_fake")
+    # Ensure they are absolute paths relative to this file's location
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    DEST_REAL = os.path.join(base_dir, "dataset", "SDFVD", "SDFVD", "videos_real")
+    DEST_FAKE = os.path.join(base_dir, "dataset", "SDFVD", "SDFVD", "videos_fake")
     os.makedirs(DEST_REAL, exist_ok=True)
     os.makedirs(DEST_FAKE, exist_ok=True)
 
