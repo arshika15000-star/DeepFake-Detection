@@ -7,8 +7,9 @@ import shutil
 import kagglehub
 
 print("Downloading audio dataset from Kaggle...")
-# Download latest version
-path = kagglehub.dataset_download("mohammedabdeldayem/the-fake-or-real-dataset")
+# Download latest version specifically requested by user
+import time
+path = kagglehub.dataset_download("adarshsingh0903/audio-deepfake-detection-dataset")
 print("Path to dataset files:", path)
 
 DEST_REAL = os.path.join("..", "dataset", "audio", "real")
@@ -26,14 +27,25 @@ for root, dirs, files in os.walk(path):
         if fname.lower().endswith(('.wav', '.mp3', '.flac', '.m4a')):
             src = os.path.join(root, fname)
             
-            # Simple heuristic
-            if 'real' in root_lower or 'real' in fname.lower() or 'human' in root_lower:
+            # Audio deepfake dataset heuristics (adapting to standard kaggle folders)
+            if any(keyword in root_lower or keyword in fname.lower() for keyword in ['real', 'human', 'authentic', 'original']):
                 dest = DEST_REAL
                 copied_real += 1
-            else:
+            elif any(keyword in root_lower or keyword in fname.lower() for keyword in ['fake', 'ai', 'synth', 'deepfake']):
                 dest = DEST_FAKE
                 copied_fake += 1
-                
+            else:
+                # If unspecified, randomly split or skip.
+                # Assuming standard Kaggle audio deepfake splits are cleanly separated by root names.
+                if 'bonafide' in root_lower or 'bonafide' in fname.lower():
+                    dest = DEST_REAL
+                    copied_real += 1
+                elif 'spoof' in root_lower or 'spoof' in fname.lower():
+                    dest = DEST_FAKE
+                    copied_fake += 1
+                else:
+                    # Skip unknown classes
+                    continue
             unique_name = f"{os.path.basename(root)}_{fname}"
             dst = os.path.join(dest, unique_name)
             shutil.copy2(src, dst)

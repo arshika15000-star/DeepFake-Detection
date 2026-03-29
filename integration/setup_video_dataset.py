@@ -1,18 +1,7 @@
-"""
-Setup script: Downloads Simon Graves deepfake video dataset from Kaggle
-and organizes it into the folder structure expected by train_video.py:
-
-  dataset/
-    SDFVD/
-      SDFVD/
-        videos_real/   <- authentic videos
-        videos_fake/   <- deepfake videos
-"""
 import os
 import shutil
 
 def main() -> None:
-    # ── 1. Download ────────────────────────────────────────────────────────────────
     print("Downloading video dataset from Kaggle...")
     import kagglehub
     path = kagglehub.dataset_download("simongraves/deepfake-dataset")
