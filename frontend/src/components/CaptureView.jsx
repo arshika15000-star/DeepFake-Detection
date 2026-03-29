@@ -25,34 +25,47 @@ export default function CaptureView({ modality, onCapture, onClose }) {
     const startStream = async () => {
         try {
             if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-                throw new Error("Your browser does not support media devices. Make sure you are using localhost or HTTPS.");
+                throw new Error("Your browser does not support media capture. Make sure you are using localhost or HTTPS.");
             }
 
-            const idealConstraints = {
-                video: modality === 'image' || modality === 'video' ? { facingMode: 'user' } : false,
-                audio: modality === 'audio' || modality === 'video' ? true : false,
-            };
-
             let newStream;
-            try {
-                newStream = await navigator.mediaDevices.getUserMedia(idealConstraints);
-            } catch (idealErr) {
-                console.warn("Ideal constraints failed, trying basic fallback...", idealErr);
+
+            // ── Build constraints based on modality ──────────────────────
+            // IMPORTANT: Never pass `video: false` or `audio: false` — just
+            // omit the key entirely. Some browsers throw NotFoundError when
+            // a key is explicitly false but no device of that type exists.
+            if (modality === 'audio') {
+                // Audio only — never request video
                 try {
-                    const basicConstraints = {
-                        video: modality === 'image' || modality === 'video' ? true : false,
-                        audio: modality === 'audio' || modality === 'video' ? true : false,
-                    };
-                    newStream = await navigator.mediaDevices.getUserMedia(basicConstraints);
-                } catch (basicErr) {
-                    console.warn("Basic combined fallback failed, attempting extreme isolation...", basicErr);
-                    if (modality === 'video') {
-                        newStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-                        console.warn("Recovered by capturing Video-Only (No microphone detected).");
-                    } else if (modality === 'audio') {
-                        newStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                    } else {
-                        throw basicErr;
+                    newStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                } catch (audioErr) {
+                    console.error('Audio-only request failed:', audioErr);
+                    throw audioErr;
+                }
+
+            } else if (modality === 'image') {
+                // Camera snapshot — never request audio
+                try {
+                    newStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
+                } catch {
+                    newStream = await navigator.mediaDevices.getUserMedia({ video: true });
+                }
+
+            } else if (modality === 'video') {
+                // Prefer both camera + mic; fall back gracefully
+                try {
+                    newStream = await navigator.mediaDevices.getUserMedia({
+                        video: { facingMode: 'user' },
+                        audio: true,
+                    });
+                } catch {
+                    try {
+                        // Try without facing-mode hint
+                        newStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                    } catch {
+                        // Last resort: video only (no mic)
+                        newStream = await navigator.mediaDevices.getUserMedia({ video: true });
+                        console.warn('Recording video without microphone — no mic detected.');
                     }
                 }
             }
@@ -61,13 +74,33 @@ export default function CaptureView({ modality, onCapture, onClose }) {
             if (videoRef.current) {
                 videoRef.current.srcObject = newStream;
             }
-        } catch (err) {
-            console.error("Error accessing media devices:", err);
-            let msg = "Unable to access camera or microphone.";
-            if (err.name === 'NotAllowedError') msg = "Permission denied. Please click the 🔒 icon in your browser URL bar and allow Camera/Microphone access.";
-            if (err.name === 'NotFoundError') msg = "No camera or microphone hardware found on this system.";
 
-            alert(`Neural Interface Error: ${msg}\n\nTechnical details: ${err.message}`);
+        } catch (err) {
+            console.error('Media device error:', err);
+
+            let msg = 'Unable to access the required device.';
+            let hint = '';
+
+            if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+                msg = 'Microphone/camera permission was denied.';
+                hint = '\n\n🔧 Fix: Click the 🔒 lock icon in your browser address bar → Site settings → Allow Microphone (and Camera if needed).';
+            } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+                if (modality === 'audio') {
+                    msg = 'No microphone found on this device.';
+                    hint = '\n\n🔧 Fix: Plug in a microphone or headset, then try again. If you already have one, make sure Windows has it enabled:\nSettings → System → Sound → Input device.';
+                } else {
+                    msg = 'No camera found on this device.';
+                    hint = '\n\n🔧 Fix: Ensure your camera is connected and not disabled in Device Manager.';
+                }
+            } else if (err.name === 'NotReadableError') {
+                msg = 'The device is already in use by another application.';
+                hint = '\n\n🔧 Fix: Close other apps using your microphone/camera (e.g., Teams, Zoom, Meet) and try again.';
+            } else if (err.name === 'OverconstrainedError') {
+                msg = 'The device does not satisfy the requested constraints.';
+                hint = '\n\n🔧 Fix: Try reloading the page.';
+            }
+
+            alert(`❌ Capture Error: ${msg}${hint}\n\nTechnical: ${err.name} — ${err.message}`);
             onClose();
         }
     };
