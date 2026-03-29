@@ -835,58 +835,46 @@ async def predict_audio(background_tasks: BackgroundTasks, file: UploadFile = Fi
 
 def _process_text(current_text, job_id):
     try:
-        update_job_progress(job_id, 20, "tokenizing_text")
-        import torch
+        update_job_progress(job_id, 10, "initializing_analysis")
         import numpy as np
         import re
-        from text_audio_models import TextDiscriminator, tokenize_text
         
         findings = []
-        score = 0.5
+        fake_prob = 0.5
         
-        # Initialize Text Discriminator
-        text_discriminator = TextDiscriminator().to(DEVICE)
-        text_discriminator.eval()
-        
-        update_job_progress(job_id, 50, "analyzing_with_discriminator")
-        tokens = tokenize_text(current_text).to(DEVICE)
-        
-        with torch.no_grad():
-            logits = text_discriminator(tokens).squeeze(0)
-            probs = torch.softmax(logits, dim=0)
-            fake_prob = probs[1].item()
-            real_prob = probs[0].item()
-        
-        # Add linguistics heuristic findings for explainability
-        if fake_prob > 0.6:
-            findings.append("Transformer Discriminator flagged sequence syntax")
-        else:
-            findings.append("Transformer Discriminator sequence classified as Human")
+        update_job_progress(job_id, 30, "loading_pretrained_llm_detector")
+        # Load a powerful pretrained model specifically trained to detect ChatGPT data
+        try:
+            from transformers import pipeline
+            # Using a well-known ChatGPT detection model from HuggingFace
+            text_detector = pipeline("text-classification", model="Hello-SimpleAI/chatgpt-detector-roberta")
             
-        formality_markers = ["furthermore", "moreover", "in conclusion", "it is important to note", "consequently"]
-        found_markers = [m for m in formality_markers if m in current_text.lower()]
-        if len(found_markers) > 1:
-            findings.append(f"High formality markers detected: {', '.join(found_markers)}")
+            update_job_progress(job_id, 60, "running_transformer_analysis")
+            # Truncate to reasonable length to avoid memory/token limits
+            analysis_text = current_text[:2500]
+            result = text_detector(analysis_text)[0]
             
-        personal_pronouns = ["i ", "me ", "my ", "mine"]
-        if not any(p in current_text.lower() for p in personal_pronouns):
-            findings.append("Absence of personal narrative/subjectivity")
+            if result['label'] == 'ChatGPT':
+                fake_prob = max(0.85, result['score'])
+                findings.append(f"Pretrained RoBERTa model detected ChatGPT signatures ({result['score']:.1%} confidence)")
+            else:
+                fake_prob = 1.0 - result['score']
+                findings.append(f"Pretrained RoBERTa model predicts human authorship")
+                
+        except Exception as e:
+            findings.append(f"Advanced Transformer fallback triggered: {str(e)}")
+            # Fallback linguistics logic if transformers fail
+            formality_markers = ["furthermore", "moreover", "in conclusion", "it is important to note", "consequently"]
+            found_markers = [m for m in formality_markers if m in current_text.lower()]
+            if len(found_markers) > 1:
+                findings.append(f"High formality markers detected: {', '.join(found_markers)}")
             
-        sentences = re.split(r'[.!?]+', current_text)
-        if len(sentences) > 3:
-            starts = [s.strip()[:10].lower() for s in sentences if len(s.strip()) > 10]
-            if len(set(starts)) < len(starts) * 0.7:
-                findings.append("Systemic structural repetition detected")
+            heuristic_score = len(found_markers) * 0.1
+            fake_prob = min(0.95, max(0.05, 0.5 + heuristic_score + (np.random.random() * 0.1)))
 
-        # Fallback combination logic (Discriminator + Heuristics)
         update_job_progress(job_id, 80, "generating_xai_artifacts")
         
-        # Introduce slight noise for missing trained weights (MVP only)
-        # Allows output to reflect heuristic confidence slightly
-        heuristic_score = len(found_markers) * 0.1 + (0.1 if "repetition" in str(findings) else 0)
-        fake_prob = min(0.95, max(0.05, fake_prob * 0.5 + heuristic_score + (np.random.random() * 0.1)))
         real_prob = 1.0 - fake_prob
-        
         pred = "FAKE" if fake_prob > 0.5 else "REAL"
         confidence = fake_prob if pred == "FAKE" else real_prob
 
@@ -896,8 +884,8 @@ def _process_text(current_text, job_id):
             "probabilities": {"fake": float(fake_prob), "real": float(real_prob)},
             "forensics": {
                 "findings": findings,
-                "complexity_index": len(current_text.split()) / (len(sentences) + 1),
-                "is_structured": True if len(found_markers) > 0 else False
+                "complexity_index": len(current_text.split()) / (len(re.split(r'[.!?]+', current_text)) + 1),
+                "is_structured": True if fake_prob > 0.5 else False
             }
         })
     except Exception as e:
