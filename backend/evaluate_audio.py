@@ -18,14 +18,25 @@ def evaluate_audio_model(data_dir):
     hidden_dim = 768
     model = AudioDiscriminator(feature_dim=hidden_dim).to(device)
     
-    # Check for weights
-    model_path = os.path.join(data_dir, "audio_model_final.pth")
-    if os.path.exists(model_path):
+    # Check for weights — try backend dir first, then data_dir
+    _script_dir = os.path.dirname(os.path.abspath(__file__))
+    model_path = None
+    for candidate in [
+        os.path.join(_script_dir, "audio_model_best.pth"),
+        os.path.join(_script_dir, "audio_model_final.pth"),
+        os.path.join(data_dir,    "audio_model_best.pth"),
+        os.path.join(data_dir,    "audio_model_final.pth"),
+    ]:
+        if os.path.exists(candidate):
+            model_path = candidate
+            break
+
+    if model_path:
         print(f"Loading weights from {model_path}...")
         model.load_state_dict(torch.load(model_path, map_location=device))
     else:
-        print("Warning: audio_model_final.pth not found. Model will use randomized untrained weights.")
-        print("Please train your audio model first on your dataset to get accurate results.")
+        print("Warning: No trained weights found. Results will be random baseline.")
+        print("Searched in:", _script_dir, "and", data_dir)
     
     model.eval()
 
@@ -51,7 +62,13 @@ def evaluate_audio_model(data_dir):
     print(f"\nFound {total} files. Evaluating...")
     for file_path, label in all_files:
         try:
-            waveform, sample_rate = torchaudio.load(file_path)
+            import soundfile as sf
+            audio, sample_rate = sf.read(file_path)
+            if audio.ndim == 1:
+                waveform = torch.from_numpy(audio).unsqueeze(0).float()
+            else:
+                waveform = torch.from_numpy(audio).transpose(0, 1).float()
+                
             if sample_rate != 16000:
                 resampler = torchaudio.transforms.Resample(sample_rate, 16000)
                 waveform = resampler(waveform)

@@ -242,9 +242,15 @@ export default function ResultDashboard({ result, onReset }) {
                                 <div className="flex items-center justify-between mb-4">
                                     <div className="flex items-center gap-3">
                                         <Type size={20} style={{ color: 'var(--primary)' }} />
-                                        <span className="text-xs font-bold uppercase tracking-widest" style={{ color: 'var(--text-main)' }}>Linguistic Structure Analysis</span>
+                                        <span className="text-xs font-bold uppercase tracking-widest" style={{ color: 'var(--text-main)' }}>LLM Linguistic Structure Analysis</span>
                                     </div>
                                 </div>
+                                {forensics.llm_summary && (
+                                    <div className="mb-4 bg-primary/10 border p-4 rounded-xl flex items-start gap-3" style={{ borderColor: 'var(--border-subtle)' }}>
+                                        <Workflow size={18} style={{ color: 'var(--primary)', marginTop: '2px' }} />
+                                        <p className="text-sm font-semibold tracking-wide leading-relaxed" style={{ color: 'var(--text-main)' }}>{forensics.llm_summary}</p>
+                                    </div>
+                                )}
                                 <div className="grid grid-cols-2 gap-4">
                                     <div className="bg-black/20 p-4 rounded-xl border" style={{ borderColor: 'var(--border-subtle)' }}>
                                         <div className="text-[10px] font-bold uppercase mb-2" style={{ color: 'var(--text-dim)' }}>Complexity Index</div>

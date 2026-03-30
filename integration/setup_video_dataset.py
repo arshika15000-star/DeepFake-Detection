@@ -7,8 +7,6 @@ def main() -> None:
     path = kagglehub.dataset_download("simongraves/deepfake-dataset")
     print(f"Downloaded to: {path}")
 
-    # ── 2. Create target folders ───────────────────────────────────────────────────
-    # Ensure they are absolute paths relative to this file's location
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     DEST_REAL = os.path.join(base_dir, "dataset", "SDFVD", "SDFVD", "videos_real")
     DEST_FAKE = os.path.join(base_dir, "dataset", "SDFVD", "SDFVD", "videos_fake")
