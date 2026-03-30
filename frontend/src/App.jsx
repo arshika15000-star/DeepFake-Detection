@@ -31,15 +31,35 @@ function GoogleIcon() {
 
 // ─── STAR BACKGROUND ───────────────────────────────────────────────────────
 function StarBackground() {
-  const stars = Array.from({ length: 70 }, (_, i) => ({
+  const stars = React.useMemo(() => Array.from({ length: 70 }, (_, i) => ({
     id: i, left: Math.random() * 100, top: Math.random() * 100,
     size: Math.random() * 3 + 1, delay: Math.random() * 5,
-  }));
+    tx1: Math.random() * 150 - 75, ty1: Math.random() * 150 - 75,
+    tx2: Math.random() * 150 - 75, ty2: Math.random() * 150 - 75,
+    tx3: Math.random() * 150 - 75, ty3: Math.random() * 150 - 75,
+    duration: Math.random() * 40 + 40
+  })), []);
+
   return (
     <div className="star-bg">
+      <style>{`
+        @keyframes float-dust {
+          0%, 100% { transform: translate(0px, 0px); }
+          25% { transform: translate(var(--tx1), var(--ty1)); }
+          50% { transform: translate(var(--tx2), var(--ty2)); }
+          75% { transform: translate(var(--tx3), var(--ty3)); }
+        }
+      `}</style>
       {stars.map(s => (
         <div key={s.id} className="star"
-          style={{ left: `${s.left}%`, top: `${s.top}%`, width: s.size, height: s.size, animationDelay: `${s.delay}s` }} />
+          style={{ 
+            left: `${s.left}%`, top: `${s.top}%`, 
+            width: s.size, height: s.size, 
+            '--tx1': `${s.tx1}px`, '--ty1': `${s.ty1}px`,
+            '--tx2': `${s.tx2}px`, '--ty2': `${s.ty2}px`,
+            '--tx3': `${s.tx3}px`, '--ty3': `${s.ty3}px`,
+            animation: `twinkle ${s.delay + 3}s ease-in-out infinite alternate, float-dust ${s.duration}s ease-in-out infinite`
+          }} />
       ))}
     </div>
   );
