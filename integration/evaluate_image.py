@@ -52,7 +52,7 @@ def load_loader(batch_size=32):
     loader = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=0)
     return loader
 
-def evaluate(model_path='deepfake_image_best.pth'):
+def evaluate(model_path='deepfake_model_best.pth'):
     print(f'Loading image model from {model_path} on {DEVICE}')
     model = build_model()
     if not os.path.exists(model_path):
