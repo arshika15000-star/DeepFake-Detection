@@ -44,6 +44,60 @@ haar_detector = None  # OpenCV Face Detection fallback
 # Job tracking
 jobs = {}
 
+# --- SAFETY & FUSION CONFIGURATION ---
+CONFIDENCE_THRESHOLD = 0.85
+STRICT_SAFETY = True
+LOG_FILE = "predictions.log"
+DEMO_MODE = os.getenv("DEMO_MODE", "false").lower() == "true"
+
+def log_prediction(job_id, modality, prediction, confidence, findings):
+    """Log predictions for audit and safety tracking"""
+    try:
+        from datetime import datetime
+        log_entry = {
+            "timestamp": datetime.now().isoformat(),
+            "job_id": job_id,
+            "modality": modality,
+            "prediction": prediction,
+            "confidence": confidence,
+            "findings": findings
+        }
+        with open(LOG_FILE, "a") as f:
+            f.write(json.dumps(log_entry) + "\n")
+    except Exception:
+        pass
+
+def is_dummy_data(content, modality="image"):
+    """Heuristic to detect if input is likely random/dummy data"""
+    if not content: return True
+    
+    if modality == "image":
+        img_np = np.frombuffer(content, np.uint8)
+        if len(img_np) < 500: return True # Tiny file
+        # Check for zero variance (solid color)
+        if np.var(img_np) < 10: return True
+    
+    return False
+
+def fuse_predictions(results_list):
+    """Combine multiple modality predictions using weighted voting"""
+    if not results_list: return None
+    
+    # Simple weighted average for confidence and majority vote for prediction
+    total_fake_score = 0
+    total_real_score = 0
+    
+    for res in results_list:
+        weight = 1.0 # Can be adjusted per modality reliability
+        if res['prediction'] == 'FAKE':
+            total_fake_score += res['confidence'] * weight
+        else:
+            total_real_score += res['confidence'] * weight
+            
+    fused_pred = "FAKE" if total_fake_score > total_real_score else "REAL"
+    fused_conf = max(total_fake_score, total_real_score) / len(results_list)
+    
+    return fused_pred, fused_conf
 def load_model():
     """Load all models on startup to ensure fast inference during demo"""
     global model, image_model, audio_model, wav2vec_model, text_model, face_detector, transform, image_transform, haar_detector
@@ -129,7 +183,12 @@ def load_model():
     # 5. Face Detectors (Global Cache)
     try:
         import mediapipe as mp
-        face_detector = mp.solutions.face_detection.FaceDetection(model_selection=1, min_detection_confidence=0.5)
+        # Compatibility handling for various mediapipe installations
+        if hasattr(mp, 'solutions'):
+            face_detection = mp.solutions.face_detection
+        else:
+            from mediapipe.python.solutions import face_detection
+        face_detector = face_detection.FaceDetection(model_selection=1, min_detection_confidence=0.5)
         print("  - Mediapipe Face Detection initialized")
     except Exception as e:
         print(f"  - Mediapipe failed: {e}")
@@ -144,8 +203,9 @@ def load_model():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Load model on startup
-    load_model()
+    # Load models in the background so the server can start listening immediately
+    # This prevents the 5-10 minute "Network Error" during cold startup/downloads
+    asyncio.create_task(asyncio.to_thread(load_model))
     yield
     # Cleanup on shutdown (if needed)
 
@@ -251,46 +311,69 @@ class GradCAM:
         self.target_layer = target_layer
         self.gradients = None
         self.activations = None
-        
-        def save_gradient(grad):
-            self.gradients = grad
-            
-        def forward_hook(module, input, output):
-            self.activations = output
-            output.register_hook(save_gradient)
-            
-        target_layer.register_forward_hook(forward_hook)
+        self.hook_handle = None
+
+    def _save_gradient(self, grad):
+        self.gradients = grad
+
+    def _forward_hook(self, module, input, output):
+        self.activations = output
+        if output.requires_grad:
+            output.register_hook(self._save_gradient)
 
     def generate(self, input_tensor, class_idx=None):
-        self.model.zero_grad()
-        output = self.model(input_tensor)
-        
-        if class_idx is None:
-            class_idx = output.argmax(dim=1).item()
+        # Temporarily enable gradients and ensure model can calculate them
+        with torch.set_grad_enabled(True):
+            input_tensor = input_tensor.clone().detach().requires_grad_(True)
+            self.model.zero_grad()
             
-        target = output[0, class_idx]
-        target.backward()
-        
-        # Pool the gradients across the channels
-        weights = torch.mean(self.gradients, dim=(2, 3), keepdim=True)
-        
-        # Weight the activations by the pooled gradients
-        cam = torch.sum(weights * self.activations, dim=1, keepdim=True)
-        
-        # ReLU and Normalize
-        cam = F.relu(cam)
-        cam = cam - cam.min()
-        cam = cam / (cam.max() + 1e-7)
-        
-        return cam.detach().cpu().numpy()[0, 0]
+            # Register hook just before forward
+            handle = self.target_layer.register_forward_hook(self._forward_hook)
+            
+            try:
+                output = self.model(input_tensor)
+                
+                if class_idx is None:
+                    class_idx = output.argmax(dim=1).item()
+                
+                target = output[0, class_idx]
+                target.backward()
+                
+                if self.gradients is None or self.activations is None:
+                    # Fallback if layer doesn't support grad (e.g. frozen)
+                    return np.zeros((input_tensor.shape[2], input_tensor.shape[3]))
+                
+                # Pool the gradients across the channels
+                weights = torch.mean(self.gradients, dim=(2, 3), keepdim=True)
+                
+                # Weight the activations by the pooled gradients
+                cam = torch.sum(weights * self.activations, dim=1, keepdim=True)
+                
+                # ReLU and Normalize
+                cam = F.relu(cam)
+                cam = cam - cam.min()
+                cam = cam / (cam.max() + 1e-7)
+                
+                return cam.detach().cpu().numpy()[0, 0]
+            finally:
+                # Always remove the hook even if it fails
+                handle.remove()
 
 # --- ADVANCED SIGNAL FORENSICS ---
 
-def get_fft_image(image_path):
+def get_fft_image(image_input):
     """Compute 2D Fast Fourier Transform to find grid artifacts"""
     try:
         import cv2
-        img = cv2.imread(image_path, 0) # Grayscale
+        if isinstance(image_input, (str, os.PathLike)):
+            img = cv2.imread(str(image_input), 0)
+        else:
+            # Handle BytesIO or bytes
+            content = image_input.getvalue() if hasattr(image_input, 'getvalue') else image_input
+            nparr = np.frombuffer(content, np.uint8)
+            img = cv2.imdecode(nparr, cv2.IMREAD_GRAYSCALE)
+            
+        if img is None: return None
         dft = np.fft.fft2(img)
         dft_shift = np.fft.fftshift(dft)
         magnitude_spectrum = 20 * np.log(np.abs(dft_shift) + 1)
@@ -306,11 +389,18 @@ def get_fft_image(image_path):
         print(f"FFT Error: {e}")
         return None
 
-def get_noise_print(image_path):
+def get_noise_print(image_input):
     """reveals high-frequency noise patterns by subtracting low-frequency content"""
     try:
         import cv2
-        img = cv2.imread(image_path)
+        if isinstance(image_input, (str, os.PathLike)):
+            img = cv2.imread(str(image_input))
+        else:
+            content = image_input.getvalue() if hasattr(image_input, 'getvalue') else image_input
+            nparr = np.frombuffer(content, np.uint8)
+            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            
+        if img is None: return None
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         
         # High pass filter (Original - Blurred)
@@ -505,95 +595,115 @@ def extract_frames_from_video(video_path, num_frames=10, job_id=None):
 
 
 def _process_image(content, filename, job_id):
-    global image_model, image_transform, haar_detector
+    global image_model, image_transform, haar_detector, image_transform
     try:
         update_job_progress(job_id, 10, "verifying_format")
         
         if image_model is None:
-            # Fallback (should not happen with lifespan)
             load_model()
 
-        update_job_progress(job_id, 30, "analyzing_biometrics")
         img = Image.open(io.BytesIO(content)).convert('RGB')
         img_np = np.array(img)
-        face_bbox = None
+        w_img, h_img = img.size
         
-        update_job_progress(job_id, 50, "extracting_features")
-        if haar_detector is not None:
+        # --- FACE DETECTION ---
+        update_job_progress(job_id, 30, "biometric_scanning")
+        face_bbox = None
+        crop_coords = None
+        
+        if face_detector:
             try:
-                gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
-                faces = haar_detector.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(60, 60))
-                if len(faces) > 0:
-                    (fx, fy, fw, fh) = faces[0]
-                    h_img, w_img, _ = img_np.shape
+                results = face_detector.process(cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR))
+                if results.detections:
+                    bbox = results.detections[0].location_data.relative_bounding_box
+                    fx, fy, fw, fh = int(bbox.xmin*w_img), int(bbox.ymin*h_img), int(bbox.width*w_img), int(bbox.height*h_img)
                     padding = int(max(fw, fh) * 0.25)
                     x1, y1 = max(0, fx - padding), max(0, fy - padding)
                     x2, y2 = min(w_img, fx + fw + padding), min(h_img, fy + fh + padding)
-                    if x2 > x1 and y2 > y1:
-                        img_np = img_np[y1:y2, x1:x2]
-                        face_bbox = {"x": fx/w_img, "y": fy/h_img, "w": fw/w_img, "h": fh/h_img}
-            except Exception as e:
-                print(f"Face detection error: {e}")
+                    crop_coords = (x1, y1, x2, y2)
+                    face_bbox = {"x": fx/w_img, "y": fy/h_img, "w": fw/w_img, "h": fh/h_img}
+            except Exception: pass
 
-        tensor = image_transform(img_np).unsqueeze(0).to(DEVICE)
+        if face_bbox is None and haar_detector:
+            try:
+                gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+                faces = haar_detector.detectMultiScale(gray, 1.1, 4)
+                if len(faces) > 0:
+                    (fx, fy, fw, fh) = faces[0]
+                    padding = int(max(fw, fh) * 0.25)
+                    x1, y1 = max(0, fx - padding), max(0, fy - padding)
+                    x2, y2 = min(w_img, fx + fw + padding), min(h_img, fy + fh + padding)
+                    crop_coords = (x1, y1, x2, y2)
+                    face_bbox = {"x": fx/w_img, "y": fy/h_img, "w": fw/w_img, "h": fh/h_img}
+            except Exception: pass
 
-        update_job_progress(job_id, 70, "running_neural_networks")
+        # --- AUDITOR RULE: MANDATORY FACE DETECTION ---
+        if face_bbox is None:
+            update_job_progress(job_id, 100, "failed", error="INVALID INPUT – NO FACE DETECTED. Deepfake analysis requires a clear facial target.")
+            return
+
+        # Prepare for model
+        input_np = img_np
+        if crop_coords:
+            x1, y1, x2, y2 = crop_coords
+            input_np = img_np[y1:y2, x1:x2]
+        
+        # Inference using correct transform (Numpy -> Tensor)
+        tensor = image_transform(input_np).unsqueeze(0).to(DEVICE)
+        
+        update_job_progress(job_id, 60, "neural_inference")
         with torch.no_grad():
             outputs = image_model(tensor)
             probs = torch.softmax(outputs, dim=1)[0]
             pred = int(outputs.argmax(dim=1).item())
-
-        update_job_progress(job_id, 85, "generating_xai_artifacts")
+        
+        confidence = float(probs[pred].item())
+        prediction = "FAKE" if pred == 0 else "REAL"
+        
+        # --- AUDITOR RULE: CONFIDENCE GATING ---
+        if confidence < 0.85:
+            prediction = "UNCERTAIN"
+            
+        update_job_progress(job_id, 80, "generating_forensics")
+        
+        # XAI (GradCAM)
         heatmap_b64 = None
         try:
             target_layer = image_model.features[-1] if hasattr(image_model, 'features') else image_model.layer4[-1]
             gcam = GradCAM(image_model, target_layer)
-            tensor_grad = tensor.clone().detach().requires_grad_(True)
-            heatmap = gcam.generate(tensor_grad, class_idx=pred)
-            heatmap_b64 = overlay_heatmap(img_np, heatmap)
-        except Exception as e:
-            print(f"Grad-CAM failed: {e}")
-
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-            tmp.write(content)
-            tmp_path = tmp.name
+            heatmap = gcam.generate(tensor, class_idx=pred)
+            heatmap_b64 = overlay_heatmap(input_np, heatmap)
+        except Exception: pass
         
-        metadata = get_metadata(tmp_path)
-        ela_b64 = get_ela_image(tmp_path)
-        fft_b64 = get_fft_image(tmp_path)
-        noise_b64 = get_noise_print(tmp_path)
+        # Forensics
+        ela_b64 = get_ela_image(io.BytesIO(content))
+        fft_b64 = get_fft_image(io.BytesIO(content))
+        noise_b64 = get_noise_print(io.BytesIO(content))
         
-        if os.path.exists(tmp_path): os.remove(tmp_path)
-
-        # 100% Accuracy deployment heuristics (using filename and metadata context)
-        fname_lower = filename.lower()
-        if any(x in fname_lower for x in ["real", "original", "human", "legit"]):
-            pred = 1 # REAL
-            probs = torch.tensor([0.01, 0.99])
-        elif any(x in fname_lower for x in ["fake", "ai", "deepfake", "gan", "gen"]):
-            pred = 0 # FAKE
-            probs = torch.tensor([0.99, 0.01])
-
-        update_job_progress(job_id, 100, "completed", result={
-            "prediction": "FAKE" if pred == 0 else "REAL",
-            "confidence": float(probs[pred].item()),
-            "probabilities": {
-                "fake": float(probs[0].item()),
-                "real": float(probs[1].item())
-            },
+        findings = []
+        if prediction == "UNCERTAIN":
+            findings.append(f"🛡️ Safety Threshold Triggered: Confidence ({confidence*100:.1f}%) is below the valid 85% requirement.")
+        if prediction == "FAKE":
+            findings.append("⚠️ Structural manipulation detected in facial alignment.")
+            
+        result_data = {
+            "prediction": prediction,
+            "confidence": confidence,
             "face_bbox": face_bbox,
             "forensics": {
                 "heatmap": heatmap_b64,
                 "ela": ela_b64,
                 "fft": fft_b64,
                 "noise": noise_b64,
-                "metadata": metadata,
-                "findings": metadata.get("findings", []),
-                "source_attribution": predict_generator_source(img_np),
-                "mesh_integrity": analyze_3d_mesh_integrity(img_np)
+                "findings": findings
             }
-        })
+        }
+        
+        print(f"[AUDIT] Image Prediction: {prediction} | Confidence: {confidence:.4f} | File: {filename}")
+        update_job_progress(job_id, 100, "completed", result=result_data)
+        
     except Exception as e:
+        print(f"Image analysis error: {e}")
         update_job_progress(job_id, 100, "failed", error=str(e))
 
 @app.post("/predict_image")
@@ -682,9 +792,18 @@ def _process_video(temp_path, job_id):
         except Exception:
             pass
 
-        update_job_progress(job_id, 100, "completed", result={
-            "prediction": "FAKE" if predicted_class == 1 else "REAL",
-            "confidence": float(max(fake_prob, real_prob)),
+        # Real Video Inference
+        final_prediction = "FAKE" if predicted_class == 1 else "REAL"
+        final_confidence = float(max(fake_prob, real_prob))
+        
+        # --- AUDITOR RULE: CONFIDENCE GATING ---
+        if final_confidence < CONFIDENCE_THRESHOLD:
+            final_prediction = "UNCERTAIN"
+            findings.append("⚠️ UNCERTAIN: Temporal consistency check failed to exceed 85% confidence threshold.")
+
+        result_data = {
+            "prediction": final_prediction,
+            "confidence": final_confidence,
             "probabilities": {
                 "fake": float(fake_prob),
                 "real": float(real_prob)
@@ -706,7 +825,10 @@ def _process_video(temp_path, job_id):
                 "metadata": vid_metadata,
                 "findings": findings
             }
-        })
+        }
+        
+        log_prediction(job_id, "video", final_prediction, final_confidence, result_data["forensics"]["findings"])
+        update_job_progress(job_id, 100, "completed", result=result_data)
     except Exception as e:
         update_job_progress(job_id, 100, "failed", error=str(e))
 
@@ -800,10 +922,16 @@ def _process_audio(content, filename, job_id):
         # Ensure proper bounds
         fake_prob = min(0.99, max(0.01, fake_prob))
         real_prob = 1.0 - fake_prob
+        # Real Audio Inference
         pred = "FAKE" if fake_prob > 0.5 else "REAL"
         confidence = fake_prob if pred == "FAKE" else real_prob
+        
+        # --- AUDITOR RULE: CONFIDENCE GATING ---
+        if confidence < CONFIDENCE_THRESHOLD:
+            pred = "UNCERTAIN"
+            findings.append("⚠️ UNCERTAIN: Vocal fingerprint analysis below safety reliability threshold.")
 
-        update_job_progress(job_id, 100, "completed", result={
+        result_data = {
             "prediction": pred,
             "confidence": float(confidence),
             "probabilities": {"fake": float(fake_prob), "real": float(real_prob)},
@@ -812,7 +940,10 @@ def _process_audio(content, filename, job_id):
                 "vocal_jitter": float(jitter_score),
                 "spectral_floor": "Clean (AI characteristic)" if fake_prob > 0.5 else "Natural Noise Observed"
             }
-        })
+        }
+        
+        log_prediction(job_id, "audio", pred, float(confidence), findings)
+        update_job_progress(job_id, 100, "completed", result=result_data)
     except Exception as e:
         update_job_progress(job_id, 100, "failed", error=str(e))
 
@@ -961,32 +1092,41 @@ def _process_url(url: str, modality: str, job_id: str):
 
     try:
         update_job_progress(job_id, 5, "downloading_url")
-
-        if not url.startswith(('http://', 'https://')):
-            raise ValueError("URL must start with http:// or https://")
-
-        # ── VIDEO: Try yt-dlp first (handles YouTube, Vimeo, Instagram, TikTok, etc.)
-        if modality in ('video', 'auto'):
+        
+        # ── HANDLE BASE64 DATA URIs (e.g. data:image/jpeg;base64,...)
+        if url.startswith('data:'):
+            update_job_progress(job_id, 10, "parsing_base64_data")
+            import base64
             try:
-                update_job_progress(job_id, 8, "detecting_video_source")
-                tmp_path = _download_with_ytdlp(url, job_id)
-                update_job_progress(job_id, 25, "routing_to_model")
-                _process_video(tmp_path, job_id)
-                return  # Done!
-            except Exception as ytdlp_err:
-                print(f"[yt-dlp] Failed for {url}: {ytdlp_err}. Falling back to direct download.")
-                # If modality was 'auto', continue to direct download below
-                if modality == 'video':
-                    # If user explicitly chose video but yt-dlp failed, try direct download
-                    pass
+                header, encoded = url.split(',', 1)
+                content_type = header.split(':', 1)[1].split(';', 1)[0]
+                content = base64.b64decode(encoded)
+                # Skip direct download logic
+            except Exception as e:
+                raise ValueError(f"Invalid Data URI format: {e}")
+        else:
+            # ── STANDARD HTTP/HTTPS DOWNLOAD
+            if not url.startswith(('http://', 'https://')):
+                raise ValueError("URL must start with http:// or https://")
 
-        # ── DIRECT DOWNLOAD (images, audio, direct .mp4 CDN links)
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-        response = req_lib.get(url, stream=True, timeout=30, headers=headers)
-        response.raise_for_status()
+            # ── VIDEO: Try yt-dlp first (handles YouTube, Vimeo, Instagram, TikTok, etc.)
+            if modality in ('video', 'auto'):
+                try:
+                    update_job_progress(job_id, 8, "detecting_video_source")
+                    tmp_path = _download_with_ytdlp(url, job_id)
+                    update_job_progress(job_id, 25, "routing_to_model")
+                    _process_video(tmp_path, job_id)
+                    return  # Done!
+                except Exception as ytdlp_err:
+                    print(f"[yt-dlp] Failed for {url}: {ytdlp_err}. Falling back to direct download.")
 
-        content_type = response.headers.get('content-type', '').lower().split(';')[0].strip()
-        content = response.content
+            # ── DIRECT DOWNLOAD (images, audio, direct .mp4 CDN links)
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            response = req_lib.get(url, stream=True, timeout=30, headers=headers)
+            response.raise_for_status()
+
+            content_type = response.headers.get('content-type', '').lower().split(';')[0].strip()
+            content = response.content
 
         update_job_progress(job_id, 20, "routing_to_model")
 
@@ -1053,8 +1193,9 @@ async def predict_from_url(
     modality: str = Form(default='auto')
 ):
     """Analyze media from a public URL. Modality can be 'image', 'video', 'audio', or 'auto'."""
-    if not url or not url.startswith(('http://', 'https://')):
-        raise HTTPException(status_code=400, detail="Please provide a valid public URL starting with http:// or https://")
+    print(f"[predict_url] Incoming URL starting with: {str(url)[:30]}...")
+    if not url or not url.startswith(('http://', 'https://', 'data:')):
+        raise HTTPException(status_code=400, detail="Please provide a valid public URL starting with http:// or https:// (or a data URI)")
 
     job_id = str(uuid.uuid4())
     jobs[job_id] = {"status": "pending", "progress": 0}

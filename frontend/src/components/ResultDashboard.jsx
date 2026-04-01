@@ -8,6 +8,8 @@ import FeedbackPanel from './FeedbackPanel';
 export default function ResultDashboard({ result, onReset }) {
     const isFake = result.prediction === 'FAKE';
     const confidence = Math.round(result.confidence * 100);
+    const isUncertain = confidence < 85;
+    const finalPrediction = isUncertain ? "UNCERTAIN" : result.prediction;
 
     // Infer media type and extract relevant forensics
     const isVideo = !!result.frames_processed;
@@ -38,8 +40,8 @@ export default function ResultDashboard({ result, onReset }) {
                             </span>
                             <div className={`h-1.5 w-1.5 rounded-full animate-ping ${isFake ? 'bg-danger' : 'bg-success'}`} />
                         </div>
-                        <h1 className={`text-6xl max-md:text-5xl font-black tracking-tighter ${isFake ? 'text-danger' : 'text-success'}`}>
-                            {result.prediction}
+                        <h1 className={`text-6xl max-md:text-5xl font-black tracking-tighter ${isUncertain ? 'text-warning' : isFake ? 'text-danger' : 'text-success'}`}>
+                            {finalPrediction}
                         </h1>
                         {isFake && forensics.source_attribution && (
                             <div className="mt-2 text-xs font-bold px-3 py-1 rounded-full bg-danger/10 text-danger border border-danger/20 inline-flex items-center gap-2">
@@ -93,8 +95,8 @@ export default function ResultDashboard({ result, onReset }) {
                             />
                         </svg>
                         <div className="absolute inset-0 flex flex-col items-center justify-center">
-                            <span className="text-6xl font-black tracking-tighter" style={{ color: 'var(--text-main)' }}>{confidence}%</span>
-                            <span className="text-[10px] font-bold uppercase tracking-widest mt-1" style={{ color: 'var(--text-dim)' }}>Certainty Index</span>
+                            <span className={`text-6xl font-black tracking-tighter ${isUncertain ? 'text-warning' : ''}`} style={{ color: isUncertain ? 'var(--warning)' : 'var(--text-main)' }}>{confidence}%</span>
+                            <span className="text-[10px] font-bold uppercase tracking-widest mt-1" style={{ color: 'var(--text-dim)' }}>{isUncertain ? 'Safety Threshold Invoked' : 'Certainty Index'}</span>
                         </div>
                     </div>
 

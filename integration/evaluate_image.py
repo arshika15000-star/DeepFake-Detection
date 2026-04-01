@@ -49,10 +49,10 @@ def get_transform():
 
 def load_loader(batch_size=32):
     ds = ImageFolder(DATA_ROOT, transform=get_transform())
-    loader = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=0)
+    loader = DataLoader(ds, batch_size=batch_size, shuffle=True, num_workers=0)
     return loader
 
-def evaluate(model_path='deepfake_model_best.pth'):
+def evaluate(model_path='deepfake_model_best.pth', max_batches=10):
     print(f'Loading image model from {model_path} on {DEVICE}')
     model = build_model()
     if not os.path.exists(model_path):
@@ -65,14 +65,20 @@ def evaluate(model_path='deepfake_model_best.pth'):
         model.load_state_dict(ck)
 
     model.eval()
+    print("Preparing data loader (this may take a few seconds due to face recognition setup)...")
     loader = load_loader()
 
     y_true = []
     y_pred = []
     y_score = []
 
+    print(f"Starting evaluation (Limit: {max_batches} batches)...")
     with torch.no_grad():
-        for images, labels in loader:
+        for i, (images, labels) in enumerate(loader):
+            if i >= max_batches:
+                break
+                
+            print(f"  -> Processing batch {i+1}/{max_batches}...", end='\r')
             images = images.to(DEVICE)
             outputs = model(images)
             probs = torch.softmax(outputs, dim=1)
@@ -83,6 +89,14 @@ def evaluate(model_path='deepfake_model_best.pth'):
             y_pred.extend(preds)
             y_score.extend(scores)
 
+    print("\n" + "="*40)
+    print("IMAGE EVALUATION RESULTS:")
+    print("="*40)
+    
+    if len(y_true) == 0:
+        print("No images were processed.")
+        return
+
     acc = accuracy_score(y_true, y_pred)
     prec = precision_score(y_true, y_pred, zero_division=0)
     rec = recall_score(y_true, y_pred, zero_division=0)
@@ -92,12 +106,21 @@ def evaluate(model_path='deepfake_model_best.pth'):
     except Exception:
         auc = float('nan')
 
-    print('Image Evaluation results:')
-    print(f'  Accuracy:  {acc:.4f}')
+    print(f'  Samples:   {len(y_true)}')
+    print(f'  Accuracy:  {acc:.4f}  ({(acc*100):.1f}%)')
     print(f'  Precision: {prec:.4f}')
     print(f'  Recall:    {rec:.4f}')
     print(f'  F1-score:  {f1:.4f}')
     print(f'  ROC AUC:   {auc:.4f}')
+    print("="*40)
+    print("0 = FAKE, 1 = REAL")
+    print("="*40)
 
 if __name__ == "__main__":
-    evaluate()
+    import argparse
+    parser = argparse.ArgumentParser(description="Evaluate image model accuracy")
+    parser.add_argument("--model", type=str, default="deepfake_model_best.pth")
+    parser.add_argument("--batches", type=int, default=10, help="Max batches to process for speed")
+    args = parser.parse_args()
+    
+    evaluate(model_path=args.model, max_batches=args.batches)

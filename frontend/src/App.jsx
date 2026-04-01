@@ -646,7 +646,10 @@ export default function App() {
   const handleUrlAnalysis = async (modality) => {
     const url = urlInputs[modality]?.trim();
     if (!url) { alert('Please paste a URL first.'); return; }
-    if (!url.startsWith('http://') && !url.startsWith('https://')) { alert('URL must start with http:// or https://'); return; }
+    if (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('data:')) { 
+      alert('URL must start with http://, https:// or data:'); 
+      return; 
+    }
     setSelectedModality(modality); setView('scanning'); setProgress({ percent: 0, status: 'downloading_url' });
     try {
       const formData = new FormData(); formData.append('url', url); formData.append('modality', modality);

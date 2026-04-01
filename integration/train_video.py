@@ -9,6 +9,10 @@ import numpy as np
 from pathlib import Path
 import time
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import confusion_matrix, classification_report, accuracy_score, precision_score, recall_score, f1_score
+import matplotlib.pyplot as plt
+import seaborn as sns
+import json
 
 # Configuration
 BATCH_SIZE = 16
@@ -315,12 +319,15 @@ def main():
         print("Error: No videos found!")
         return
     
-    # Split into train and validation
-    train_paths, val_paths, train_auth, val_auth, train_emo, val_emo = train_test_split(
-        video_paths, auth_labels, emotion_labels, test_size=0.2, random_state=42, stratify=auth_labels
+    # Split into train, val, and test (70/15/15)
+    train_paths, temp_paths, train_auth, temp_auth, train_emo, temp_emo = train_test_split(
+        video_paths, auth_labels, emotion_labels, test_size=0.3, random_state=42, stratify=auth_labels
+    )
+    val_paths, test_paths, val_auth, test_auth, val_emo, test_emo = train_test_split(
+        temp_paths, temp_auth, temp_emo, test_size=0.5, random_state=42, stratify=temp_auth
     )
     
-    print(f"Train samples: {len(train_paths)}, Val samples: {len(val_paths)}")
+    print(f"Dataset split: Train={len(train_paths)}, Val={len(val_paths)}, Test={len(test_paths)}")
     print()
     
     # Create datasets
@@ -400,6 +407,55 @@ def main():
     print("\n" + "=" * 60)
     print(f"Training completed in {total_time:.2f}s ({total_time/60:.2f} minutes)")
     print(f"Best validation accuracy: {best_val_acc:.2f}%")
+    
+    # Final Evaluation on Test Set
+    print("\nStarting final test set evaluation...")
+    test_dataset = VideoFrameDataset(test_paths, test_auth, test_emo, transform=get_test_transforms())
+    test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
+    
+    model.eval()
+    all_preds = []
+    all_true = []
+    with torch.no_grad():
+        for frames, auth_y, _ in test_loader:
+            frames = frames.to(DEVICE)
+            outputs, _ = model(frames)
+            preds = outputs.argmax(1).cpu().numpy()
+            all_preds.extend(preds)
+            all_true.extend(auth_y.numpy())
+    
+    # Compute detailed metrics
+    acc = accuracy_score(all_true, all_preds)
+    prec = precision_score(all_true, all_preds, zero_division=0)
+    rec = recall_score(all_true, all_preds, zero_division=0)
+    f1 = f1_score(all_true, all_preds, zero_division=0)
+    conf_mat = confusion_matrix(all_true, all_preds)
+    
+    metrics = {
+        "accuracy": acc,
+        "precision": prec,
+        "recall": rec,
+        "f1": f1,
+        "confusion_matrix": conf_mat.tolist()
+    }
+    
+    with open("video_training_metrics.json", "w") as f:
+        json.dump(metrics, f, indent=4)
+        
+    print("\nFinal Test Metrics:")
+    print(f"  Accuracy:  {acc:.4f}")
+    print(f"  Precision: {prec:.4f}")
+    print(f"  Recall:    {rec:.4f}")
+    print(f"  F1-score:  {f1:.4f}")
+    
+    # Generate Confusion Matrix Plot
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(conf_mat, annot=True, fmt='d', cmap='Blues', xticklabels=['Real', 'Fake'], yticklabels=['Real', 'Fake'])
+    plt.title('Video Deepfake Detection - Confusion Matrix')
+    plt.ylabel('Actual')
+    plt.xlabel('Predicted')
+    plt.savefig('video_confusion_matrix.png')
+    print("  ⭐ Confusion matrix saved to video_confusion_matrix.png")
     
     # Save final model
     torch.save(model.state_dict(), "video_model_final.pth")

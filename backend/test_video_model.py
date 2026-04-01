@@ -24,8 +24,10 @@ class DeepfakeDetector(nn.Module):
         self.avgpool = nn.AdaptiveAvgPool2d(1)
         
         # ResNet50 outputs 2048 features
-        self.lstm = nn.LSTM(input_size=2048, hidden_size=256, num_layers=2, 
-                           batch_first=True, dropout=0.3, bidirectional=True)
+        self.lstm = nn.LSTM(input_size=2048, hidden_size=512, num_layers=2, bidirectional=True, batch_first=True, dropout=0.5)
+        self.dropout = nn.Dropout(0.5)
+        self.fc1 = nn.Linear(512 * 2, 2) # Authenticity
+        self.fc2 = nn.Linear(512 * 2, 7) # Emotion
         
         # Authenticity Classification head (Real vs Fake)
         self.classifier = nn.Sequential(
@@ -59,14 +61,13 @@ class DeepfakeDetector(nn.Module):
         features = features.view(batch_size, num_frames, -1)  # (batch, frames, 512)
         
         # Process temporal sequence with LSTM
-        lstm_out, _ = self.lstm(features)  # (batch, frames, 256)
+        lstm_out, _ = self.lstm(features)
+        # Use only the last hidden state for classification
+        last_hidden = lstm_out[:, -1, :]
+        last_hidden = self.dropout(last_hidden)
         
-        # Use the last LSTM output
-        last_output = lstm_out[:, -1, :]  # (batch, 256)
-        
-        # Multi-task outputs
-        authen_out = self.classifier(last_output)
-        emotion_out = self.emotion_classifier(last_output)
+        authen_out = self.fc1(last_hidden)
+        emotion_out = self.fc2(last_hidden)
         
         return authen_out, emotion_out
 
