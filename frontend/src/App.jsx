@@ -9,11 +9,13 @@ import ScannerView from './components/ScannerView';
 import CaptureView from './components/CaptureView';
 import ResultDashboard from './components/ResultDashboard';
 import LandingContent from './components/LandingContent';
+import AnalyticsDashboard from './components/AnalyticsDashboard';
+import AIAssistant from './components/AIAssistant';
 const getApiBaseUrl = () => {
   if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_API_BASE_URL) {
     return import.meta.env.VITE_API_BASE_URL;
   }
-  return "http://127.0.0.1:8000";
+  return "http://127.0.0.1:8005";
 };
 const API_BASE = getApiBaseUrl();
 
@@ -593,6 +595,13 @@ export default function App() {
   const [showAbout, setShowAbout] = useState(false);
   const [showForgotPwd, setShowForgotPwd] = useState(false);
   const [progress, setProgress] = useState({ percent: 0, status: 'initializing' });
+  const [errorMsg, setErrorMsg] = useState(null);
+
+  const showError = (msg) => {
+    setErrorMsg(msg);
+    setView('home');
+    setTimeout(() => setErrorMsg(null), 6000);
+  };
 
   // ── Logged-in user (persisted) ──
   const [currentUser, setCurrentUser] = useState(() => {
@@ -620,13 +629,16 @@ export default function App() {
     try {
       const res = await axios.get(`${API_BASE}/job/${jobId}`);
       const job = res.data;
-      setProgress({ percent: job.progress, status: job.status });
+      setProgress({ percent: job.progress || 0, status: job.status });
       if (job.status === 'completed') { setAnalysisResult(job.result); setView('result'); }
-      else if (job.status === 'failed') throw new Error(job.error || 'Analysis failed');
+      else if (job.status === 'failed') {
+        const errDetail = job.error || 'Analysis failed. Please try a different file.';
+        showError(`❌ Analysis Failed: ${errDetail}`);
+      }
       else setTimeout(() => pollJobStatus(jobId), 1000);
     } catch (err) {
-      alert('Analysis Failed: ' + (err.response?.data?.detail || err.message));
-      setView('home');
+      const detail = err.response?.data?.message || err.response?.data?.detail || err.message;
+      showError(`❌ Connection Error: ${detail}. Is the backend running on ${API_BASE}?`);
     }
   };
 
@@ -636,19 +648,28 @@ export default function App() {
       const formData = new FormData();
       let endpoint = '';
       if (modality === 'text') { endpoint = '/predict_text'; formData.append('current_text', inputData); }
-      else { endpoint = modality === 'image' ? '/predict_image' : modality === 'audio' ? '/predict_audio' : '/predict'; formData.append('file', inputData); }
+      else {
+        endpoint = modality === 'image' ? '/predict_image' : modality === 'audio' ? '/predict_audio' : '/predict';
+        formData.append('file', inputData);
+      }
       const response = await axios.post(`${API_BASE}${endpoint}`, formData);
       if (response.data.job_id) pollJobStatus(response.data.job_id);
       else { setAnalysisResult(response.data); setView('result'); }
-    } catch (err) { alert('Upload Failed: ' + (err.response?.data?.detail || err.message)); setView('home'); }
+    } catch (err) {
+      const detail = err.response?.data?.message || err.response?.data?.detail || err.message;
+      const statusCode = err.response?.status;
+      if (statusCode === 413) showError(`❌ File Too Large: ${detail}`);
+      else if (statusCode === 400) showError(`❌ Invalid File: ${detail}`);
+      else showError(`❌ Upload Failed: ${detail}. Check that the backend is running.`);
+    }
   };
 
   const handleUrlAnalysis = async (modality) => {
     const url = urlInputs[modality]?.trim();
-    if (!url) { alert('Please paste a URL first.'); return; }
-    if (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('data:')) { 
-      alert('URL must start with http://, https:// or data:'); 
-      return; 
+    if (!url) { showError('⚠️ Please paste a URL first.'); return; }
+    if (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('data:')) {
+      showError('⚠️ URL must start with http://, https:// or data:');
+      return;
     }
     setSelectedModality(modality); setView('scanning'); setProgress({ percent: 0, status: 'downloading_url' });
     try {
@@ -656,7 +677,10 @@ export default function App() {
       const response = await axios.post(`${API_BASE}/predict_url`, formData);
       if (response.data.job_id) pollJobStatus(response.data.job_id);
       else { setAnalysisResult(response.data); setView('result'); }
-    } catch (err) { alert('URL Analysis Failed: ' + (err.response?.data?.detail || err.message)); setView('home'); }
+    } catch (err) {
+      const detail = err.response?.data?.message || err.response?.data?.detail || err.message;
+      showError(`❌ URL Analysis Failed: ${detail}`);
+    }
   };
 
   const ALLOWED_TYPES = {
@@ -669,8 +693,14 @@ export default function App() {
   const handleFileUpload = (e, modality) => {
     const f = e.target.files[0]; if (!f) return;
     const allowed = ALLOWED_TYPES[modality] || [], maxMB = MAX_FILE_MB[modality] || 100, sizeMB = f.size / (1024 * 1024);
-    if (!allowed.includes(f.type)) { alert(`❌ Invalid file type.\nAllowed: ${allowed.map(t => t.split('/')[1].toUpperCase()).join(', ')}`); e.target.value = ''; return; }
-    if (sizeMB > maxMB) { alert(`❌ File too large (${sizeMB.toFixed(1)} MB). Max: ${maxMB} MB.`); e.target.value = ''; return; }
+    if (!allowed.includes(f.type)) {
+      showError(`❌ Invalid file type for ${modality}. Allowed: ${allowed.map(t => t.split('/')[1].toUpperCase()).join(', ')}`);
+      e.target.value = ''; return;
+    }
+    if (sizeMB > maxMB) {
+      showError(`❌ File too large: ${sizeMB.toFixed(1)} MB. Maximum for ${modality} is ${maxMB} MB.`);
+      e.target.value = ''; return;
+    }
     startAnalysis(f, modality);
   };
 
@@ -682,7 +712,7 @@ export default function App() {
     if (f.type.startsWith('image/')) handleFileUpload({ target: { files: [f] } }, 'image');
     else if (f.type.startsWith('video/')) handleFileUpload({ target: { files: [f] } }, 'video');
     else if (f.type.startsWith('audio/')) handleFileUpload({ target: { files: [f] } }, 'audio');
-    else alert('❌ Unsupported file type.');
+    else showError('❌ Unsupported file type. Drag an image, video, or audio file.');
   };
 
   const modalityColors = {
@@ -758,6 +788,20 @@ export default function App() {
       style={{ backgroundColor: isDark ? '#000' : '#f0f4f8', color: isDark ? '#fff' : '#0f172a' }}
       onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
       <StarBackground />
+      <AIAssistant isDark={isDark} />
+
+      {/* ── Error Toast Notification ── */}
+      {errorMsg && (
+        <div className="fixed top-6 left-1/2 z-[500] fade-up" style={{ transform: 'translateX(-50%)', maxWidth: '520px', width: '90vw' }}>
+          <div className="flex items-start gap-3 px-5 py-4 rounded-2xl shadow-2xl border text-sm font-semibold"
+            style={{ background: 'rgba(20,8,8,0.97)', borderColor: 'rgba(239,68,68,0.5)', color: '#fca5a5', backdropFilter: 'blur(16px)' }}>
+            <span style={{ fontSize: 18, flexShrink: 0 }}>⚠️</span>
+            <span className="flex-1 leading-relaxed">{errorMsg}</span>
+            <button onClick={() => setErrorMsg(null)} className="hover:opacity-100 transition-opacity font-black text-lg leading-none"
+              style={{ color: '#fca5a5', flexShrink: 0, opacity: 0.7 }}>✕</button>
+          </div>
+        </div>
+      )}
 
       {/* ── Modals ── */}
       {showAuth && (
@@ -796,6 +840,10 @@ export default function App() {
           <button id="about-nav-btn" onClick={() => setShowAbout(true)}
             className="nav-link font-semibold text-sm tracking-wide transition-colors hover:text-[#7ec8a0]"
             style={{ color: navTextColor }}>About</button>
+
+          <button id="analytics-nav-btn" onClick={() => setView('analytics')}
+            className="nav-link font-semibold text-sm tracking-wide transition-colors hover:text-[#6390ff]"
+            style={{ color: navTextColor }}>Analytics</button>
 
           {/* Theme Toggle */}
           <ThemeToggle isDark={isDark} onToggle={toggleTheme} />
@@ -864,6 +912,7 @@ export default function App() {
             <ResultDashboard result={analysisResult} onReset={() => setView('home')} />
           </div>
         )}
+        {view === 'analytics' && <AnalyticsDashboard onBack={() => setView('home')} isDark={isDark} />}
       </main>
     </div>
   );

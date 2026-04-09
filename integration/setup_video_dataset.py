@@ -28,23 +28,25 @@ def main() -> None:
             if fname.lower().endswith(('.mp4', '.avi', '.mov', '.webm', '.mkv')):
                 src = os.path.join(root, fname)
                 
-                # Simple heuristic since it's a small dataset:
-                # If the path contains 'real', 'original', 'authentic':
-                if any(k in root_lower or k in fname.lower() for k in ['real', 'original', 'authentic']):
-                    dest = DEST_REAL
-                    copied_real += 1  # type: ignore
-                else:
+                # Correct heuristic for simongraves/deepfake-dataset structure:
+                # Get the name of the immediate parent folder
+                parent_folder = os.path.basename(root).lower()
+                
+                if parent_folder == 'deepfake' or 'fake' in fname.lower():
                     dest = DEST_FAKE
                     copied_fake += 1  # type: ignore
+                else:
+                    dest = DEST_REAL
+                    copied_real += 1  # type: ignore
                     
                 unique_name = f"{os.path.basename(root)}_{fname}"
                 dst = os.path.join(dest, unique_name)
                 shutil.copy2(src, dst)
 
-    # ── 4. Summary ─────────────────────────────────────────────────────────────────
+    # -- 4. Summary -----------------------------------------------------------------
     print(f"\nDataset setup complete!")
-    print(f"  Real videos copied : {copied_real}  →  {DEST_REAL}")
-    print(f"  Fake videos copied : {copied_fake}  →  {DEST_FAKE}")
+    print(f"  Real videos copied : {copied_real}  ->  {DEST_REAL}")
+    print(f"  Fake videos copied : {copied_fake}  ->  {DEST_FAKE}")
     print()
     if copied_real == 0 and copied_fake == 0:
         print("WARNING: No videos were found or copied.")

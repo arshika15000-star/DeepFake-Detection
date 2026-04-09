@@ -15,7 +15,7 @@ A forensic-grade deepfake detection system supporting **image, video, audio, and
 └──────────────────────┬──────────────────────────────────┘
                        │ HTTP + FormData + Job Polling
 ┌──────────────────────▼──────────────────────────────────┐
-│  FastAPI Backend                http://127.0.0.1:8000   │
+│  FastAPI Backend                http://127.0.0.1:8005   │
 │  POST /predict_image  → job_id (ResNeXt50 + Grad-CAM)   │
 │  POST /predict        → job_id (ResNet18-LSTM + rPPG)   │
 │  POST /predict_audio  → job_id (Wav2Vec heuristics)     │
@@ -27,7 +27,7 @@ A forensic-grade deepfake detection system supporting **image, video, audio, and
 
 ## 📡 API Response Schema
 
-All prediction endpoints follow a unified schema returned via `/job/{job_id}`:
+All prediction endpoints return a `job_id` immediately. Poll `/job/{job_id}` to get results:
 
 ```json
 {
@@ -35,15 +35,23 @@ All prediction endpoints follow a unified schema returned via `/job/{job_id}`:
   "confidence": 0.87,
   "probabilities": { "fake": 0.87, "real": 0.13 },
   "forensics": {
-    "heatmap": "<base64 JPEG>",
-    "ela": "<base64 JPEG>",
+    "heatmap":  "<base64 JPEG — Grad-CAM attention map>",
+    "ela":      "<base64 JPEG — Error Level Analysis>",
+    "fft":      "<base64 JPEG — FFT frequency spectrum>",
+    "noise":    "<base64 JPEG — High-frequency noise print>",
     "findings": ["AI Signature found in metadata: ..."],
-    "source_attribution": { "most_likely": "Stable Diffusion" },
-    "mesh_integrity": { "integrity_score": 0.65 },
+    "metadata": { "software": "Stable Diffusion", "suspicious": true, "findings": [] },
+    "source_attribution": { "most_likely": "StyleGAN2", "confidence": 0.41, "all_probs": {} },
+    "neural_metrics": { "temporal_coherence": 0.82 },
     "vocal_jitter": 0.021,
     "complexity_index": 12.4
   }
 }
+```
+
+**Error responses** (structured JSON, not plain text):
+```json
+{ "error": true, "message": "Image too large: 12.3 MB (max 10 MB)", "status_code": 413 }
 ```
 
 ---
@@ -91,8 +99,8 @@ python train_video.py
 
 ```bash
 python app.py
-# API running at http://127.0.0.1:8000
-# Docs at       http://127.0.0.1:8000/docs
+# API running at http://127.0.0.1:8005
+# Docs at       http://127.0.0.1:8005/docs
 ```
 
 ### 6. Start the Frontend
@@ -108,18 +116,43 @@ npm run dev
 
 ## ⚙️ Configuration
 
-### Backend CORS
-The backend allows all origins by default for local development. For production, update `app.py`:
-```python
-allow_origins=["https://yourdomain.com"]
+### Backend Environment Variables
+
+Copy `backend/.env.example` to `backend/.env`:
+
+```env
+# Backend
+HOST=127.0.0.1
+PORT=8005
+ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+MAX_IMAGE_MB=10
+MAX_VIDEO_MB=200
+MAX_AUDIO_MB=50
+DEMO_MODE=false
 ```
 
 ### Frontend API URL
-Create a `.env` file in `/frontend`:
+
+The `frontend/.env` file should contain:
 ```env
-VITE_API_BASE_URL=http://127.0.0.1:8000
+VITE_API_BASE_URL=http://127.0.0.1:8005
 ```
-Falls back to `http://127.0.0.1:8000` if not set.
+Falls back to `http://127.0.0.1:8005` if not set.
+
+### Rate Limiting (Optional)
+
+Install `slowapi` to enable request rate limiting:
+```bash
+pip install slowapi
+```
+The backend will automatically enable it — 10 requests/minute per IP on prediction endpoints.
+
+### CORS for Production
+
+Set `ALLOWED_ORIGINS` in `.env` to your deployed frontend domain:
+```env
+ALLOWED_ORIGINS=https://your-frontend.vercel.app
+```
 
 ---
 
@@ -136,19 +169,20 @@ Falls back to `http://127.0.0.1:8000` if not set.
 
 ---
 
-## 🔬 Explainability Features
+## 🔬 Explainability Features (XAI)
 
 | Feature | Modality | Description |
 |---------|----------|-------------|
-| **Grad-CAM Heatmap** | Image | Highlights manipulated facial regions |
+| **Grad-CAM Heatmap** | Image/Video | Highlights manipulated facial regions |
 | **Error Level Analysis (ELA)** | Image | Detects compression inconsistencies |
-| **FFT Noise Print** | Image | Frequency domain forgery patterns |
-| **Generator Source Attribution** | Image | Identifies GAN/Diffusion origin |
-| **3D Mesh Integrity** | Image | Biometric face flatness detection |
+| **FFT Frequency Map** | Image | Spectral forgery/GAN grid artifacts |
+| **Noise Print** | Image | High-frequency noise residual pattern |
+| **Generator Source Attribution** | Image | Probabilistic ID of GAN/Diffusion origin |
+| **Forensic Metadata Table** | Image/Video | EXIF/codec analysis for AI software signatures |
 | **rPPG Pulse Visualization** | Video | Remote photoplethysmography signal |
 | **Temporal Coherence** | Video | Frame-to-frame consistency metrics |
 | **Vocal Jitter** | Audio | Synthetic voice smoothness detection |
-| **Linguistic Complexity** | Text | AI writing pattern analysis |
+| **Linguistic Complexity** | Text | AI writing pattern & burstiness analysis |
 
 ---
 
@@ -183,14 +217,17 @@ Deepfake Detection/
 
 ## 📋 Requirements
 
-See `requirements.txt`. Key dependencies:
-- `fastapi`, `uvicorn` — API server
-- `torch`, `torchvision` — Deep learning
-- `opencv-python` — Video processing
+See `backend/requirements.txt`. Key dependencies:
+- `fastapi>=0.100.0`, `uvicorn[standard]` — API server
+- `torch`, `torchvision`, `torchaudio` — Deep learning
+- `opencv-python` — Video/image processing  
 - `mediapipe` — Face detection
-- `torchaudio` — Audio processing
+- `soundfile` — Audio file I/O
+- `transformers` — Text detection (RoBERTa)
 - `pillow` — Image utilities
-- `scikit-learn` — Metrics
+- `scikit-learn` — Metrics & meta-classifier
+- `slowapi` — Rate limiting (optional)
+- `yt-dlp` — URL video download
 
 ---
 

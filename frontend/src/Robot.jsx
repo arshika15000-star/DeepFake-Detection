@@ -95,7 +95,7 @@ export default function Robot() {
             const formData = new FormData();
             formData.append('current_text', input);
 
-            const res = await fetch('http://localhost:8000/predict_text', {
+            const res = await fetch('http://localhost:8005/predict_text', {
                 method: 'POST',
                 body: formData,
             });
@@ -145,7 +145,7 @@ export default function Robot() {
         else if (fileType === 'audio') endpoint = '/predict_audio';
 
         try {
-            const res = await fetch(`http://localhost:8000${endpoint}`, {
+            const res = await fetch(`http://localhost:8005${endpoint}`, {
                 method: 'POST',
                 body: formData,
             });

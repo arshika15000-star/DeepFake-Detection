@@ -1,0 +1,22 @@
+{
+  "status": "completed",
+  "progress": 100,
+  "result": {
+    "prediction": "REAL",
+    "confidence": 0.9954620816336144,
+    "probabilities": {
+      "fake": 0.004537918366385618,
+      "real": 0.9954620816336144
+    },
+    "forensics": {
+      "findings": [
+        "LLM semantic sequencing detected Human authorship (56.87% confidence).",
+        "Conclusion: Text exhibits human-like unpredictable burstiness and variance.",
+        "LLM Verdict: Natural conversational or creative human structure."
+      ],
+      "complexity_index": 2.6666666666666665,
+      "is_structured": false,
+      "llm_summary": "Our integrated LLM analysis is 99.55% certain this text is REAL based on predictability and burstiness."
+    }
+  }
+}

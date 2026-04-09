@@ -1127,7 +1127,7 @@
                     formData.append('file', selectedFile);
                 }
 
-                const response = await fetch(`http://127.0.0.1:8000${endpoint}`, {
+                const response = await fetch(`http://127.0.0.1:8005${endpoint}`, {
                     method: 'POST',
                     body: formData
                 });

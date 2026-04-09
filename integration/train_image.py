@@ -7,14 +7,20 @@ from torchvision import datasets, transforms, models
 from torch.utils.data import DataLoader, random_split
 from sklearn.metrics import accuracy_score
 
+# Absolute path to this script's directory — ensures dataset is found regardless
+# of which directory the script is launched from
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.dirname(_SCRIPT_DIR)  # one level up from integration/
+
 # Config
 BATCH_SIZE = 32
-NUM_EPOCHS = 5
-MAX_STEPS_PER_EPOCH = 50   # Limit the number of batches per epoch to speed it up drastically
-LEARNING_RATE = 1e-3       # Increased learning rate for frozen backbone
+NUM_EPOCHS = 20           # was 5 — more epochs needed to converge on deepfake patterns
+MAX_STEPS_PER_EPOCH = 200  # was 50 — more steps per epoch for meaningful gradient updates
+LEARNING_RATE = 3e-4       # was 1e-3 — lower LR needed for fine-tuning pretrained backbone
 IMAGE_SIZE = 224
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-DATA_ROOT = os.path.join("dataset", "images")  # expects images/real and images/fake
+DATA_ROOT = os.path.join(_PROJECT_ROOT, "dataset", "images")
+SAVE_DIR = _PROJECT_ROOT
 
 # Cap total samples per class when running on CPU to keep training fast.
 # Set to None to use the full dataset (recommended when GPU is available).
@@ -81,8 +87,18 @@ def build_model(num_classes=2, freeze_backbone=False):
         model = models.resnext50_32x4d(pretrained=True)
 
     if freeze_backbone:
+        # Freeze ALL parameters first
         for param in model.parameters():
             param.requires_grad = False
+        # Then selectively UNFREEZE the last 2 feature blocks + classifier
+        # This gives the model the ability to learn deepfake-specific patterns
+        # while keeping early ImageNet features frozen (better generalisation)
+        unfreeze_keywords = ['features.6', 'features.7', 'features.8', 'classifier']
+        for name, param in model.named_parameters():
+            if any(kw in name for kw in unfreeze_keywords):
+                param.requires_grad = True
+        n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"[Model] Partial unfreeze: {n_trainable:,} trainable params (last 2 blocks + head)")
 
     # Replace classification head
     if hasattr(model, 'classifier'):
@@ -113,9 +129,9 @@ def load_datasets(root=DATA_ROOT, val_fraction=0.2):
             capped_indices.extend(indices[:MAX_SAMPLES_PER_CLASS])
 
         full = torch.utils.data.Subset(full, capped_indices)
-        print(f"[CPU Mode] Capped to {MAX_SAMPLES_PER_CLASS} samples/class → {len(full)} total images")
+        print(f"[CPU Mode] Capped to {MAX_SAMPLES_PER_CLASS} samples/class -> {len(full)} total images")
     else:
-        print(f"[GPU Mode] Using full dataset: {len(full)} images")
+        print(f"[Training] Found {len(full)} total images")
 
     n_val = max(1, int(len(full) * val_fraction))
     n_train = len(full) - n_val
@@ -131,7 +147,7 @@ def train():
     if train_loader is None:
         return
 
-    # Freeze backbone to train ONLY the final layer (Transfer Learning). This is ~5-10x faster.
+    # Partially unfreeze backbone (last 2 blocks) — critical for learning deepfake features
     model = build_model(freeze_backbone=True)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=LEARNING_RATE)

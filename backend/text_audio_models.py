@@ -2,8 +2,17 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
+import librosa
+import numpy as np
 
-# =========================================================
+def extract_audio_features(audio, sr=16000):
+    mfcc       = librosa.feature.mfcc(y=audio, sr=sr, n_mfcc=40)
+    mfcc_delta = librosa.feature.delta(mfcc)       # velocity
+    mfcc_delta2 = librosa.feature.delta(mfcc, order=2)  # acceleration
+    # Shape of each is (40, time), concatenation makes it (120, time)
+    features = np.concatenate([mfcc, mfcc_delta, mfcc_delta2], axis=0)
+    return features
+
 # Text Discriminator (GAN Discriminator style architecture)
 # =========================================================
 class TextDiscriminator(nn.Module):

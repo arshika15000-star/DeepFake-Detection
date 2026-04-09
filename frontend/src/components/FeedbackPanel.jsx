@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { ThumbsUp, ThumbsDown, MessageSquare, Send, CheckCircle, X } from 'lucide-react';
 import axios from 'axios';
 
-const API_BASE = "http://127.0.0.1:8000";
+const API_BASE = "http://127.0.0.1:8005";
 
 export default function FeedbackPanel({ result, mediaType = 'image' }) {
     const [vote, setVote] = useState(null); // 'correct' | 'wrong'

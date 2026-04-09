@@ -132,14 +132,18 @@ class VideoFrameDataset(Dataset):
         return frames_tensor, auth_label, emotion_label
 
 def get_transforms():
-    """Data augmentation and normalization"""
+    """Advanced data augmentation for better generalization"""
     return transforms.Compose([
         transforms.ToPILImage(),
-        transforms.Resize(IMAGE_SIZE),
+        transforms.Resize((256, 256)),
+        transforms.RandomCrop(IMAGE_SIZE),
         transforms.RandomHorizontalFlip(p=0.5),
-        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+        transforms.RandomRotation(15),
+        transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.1),
+        transforms.RandomPerspective(distortion_scale=0.2, p=0.5),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        transforms.RandomErasing(p=0.2, scale=(0.02, 0.1)), # Occlusion robustness
     ])
 
 def get_test_transforms():
@@ -214,7 +218,7 @@ def load_video_dataset():
     
     return video_paths, auth_labels, emotion_labels
 
-def train_epoch(model, dataloader, criterion, optimizer, device, scaler=None):
+def train_epoch(model, dataloader, criterion_auth, criterion_emo, optimizer, device, scaler=None):
     """Train for one epoch with Multi-Task Loss"""
     model.train()
     running_loss = 0.0
@@ -237,8 +241,8 @@ def train_epoch(model, dataloader, criterion, optimizer, device, scaler=None):
         if use_cuda and scaler:
             with torch.amp.autocast('cuda'):
                 auth_out, emo_out = model(frames)
-                loss_auth = criterion(auth_out, auth_y)
-                loss_emo = criterion(emo_out, emo_y)
+                loss_auth = criterion_auth(auth_out, auth_y)
+                loss_emo = criterion_emo(emo_out, emo_y)
                 loss = loss_auth + 0.5 * loss_emo # Combine losses
             
             scaler.scale(loss).backward()
@@ -246,8 +250,8 @@ def train_epoch(model, dataloader, criterion, optimizer, device, scaler=None):
             scaler.update()
         else:
             auth_out, emo_out = model(frames)
-            loss_auth = criterion(auth_out, auth_y)
-            loss_emo = criterion(emo_out, emo_y)
+            loss_auth = criterion_auth(auth_out, auth_y)
+            loss_emo = criterion_emo(emo_out, emo_y)
             loss = loss_auth + 0.5 * loss_emo
             loss.backward()
             optimizer.step()
@@ -270,7 +274,7 @@ def train_epoch(model, dataloader, criterion, optimizer, device, scaler=None):
     epoch_acc = 100. * correct_auth / total
     return epoch_acc
 
-def validate(model, dataloader, criterion, device):
+def validate(model, dataloader, criterion_auth, criterion_emo, device):
     """Validate model on Multi-Task Performance"""
     model.eval()
     running_loss = 0.0
@@ -285,8 +289,8 @@ def validate(model, dataloader, criterion, device):
             emo_y = emo_y.to(device)
             
             auth_out, emo_out = model(frames)
-            loss_auth = criterion(auth_out, auth_y)
-            loss_emo = criterion(emo_out, emo_y)
+            loss_auth = criterion_auth(auth_out, auth_y)
+            loss_emo = criterion_emo(emo_out, emo_y)
             loss = loss_auth + 0.5 * loss_emo
             
             running_loss += loss.item()
@@ -319,13 +323,23 @@ def main():
         print("Error: No videos found!")
         return
     
-    # Split into train, val, and test (70/15/15)
-    train_paths, temp_paths, train_auth, temp_auth, train_emo, temp_emo = train_test_split(
-        video_paths, auth_labels, emotion_labels, test_size=0.3, random_state=42, stratify=auth_labels
-    )
-    val_paths, test_paths, val_auth, test_auth, val_emo, test_emo = train_test_split(
-        temp_paths, temp_auth, temp_emo, test_size=0.5, random_state=42, stratify=temp_auth
-    )
+    if len(video_paths) < 20:
+        # Prevent stratification errors on tiny datasets (like the 8-video Kaggle set)
+        print("Dataset is very small, using simple splits without stratification.")
+        train_paths, temp_paths, train_auth, temp_auth, train_emo, temp_emo = train_test_split(
+            video_paths, auth_labels, emotion_labels, test_size=0.4, random_state=42
+        )
+        val_paths, test_paths, val_auth, test_auth, val_emo, test_emo = train_test_split(
+            temp_paths, temp_auth, temp_emo, test_size=0.5, random_state=42
+        )
+    else:
+        # Split into train, val, and test (70/15/15)
+        train_paths, temp_paths, train_auth, temp_auth, train_emo, temp_emo = train_test_split(
+            video_paths, auth_labels, emotion_labels, test_size=0.3, random_state=42, stratify=auth_labels
+        )
+        val_paths, test_paths, val_auth, test_auth, val_emo, test_emo = train_test_split(
+            temp_paths, temp_auth, temp_emo, test_size=0.5, random_state=42, stratify=temp_auth
+        )
     
     print(f"Dataset split: Train={len(train_paths)}, Val={len(val_paths)}, Test={len(test_paths)}")
     print()
@@ -348,17 +362,34 @@ def main():
     print("Building model...")
     model = DeepfakeDetector(num_frames=FRAMES_PER_VIDEO).to(DEVICE)
     
-    # Loss and optimizer
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', 
-                                                     factor=0.5, patience=2)
+    # Calculate Class Weights for Imbalanced Dataset
+    num_real = len([x for x in train_auth if x == 0])
+    num_fake = len([x for x in train_auth if x == 1])
+    total_train = len(train_auth)
+    
+    if num_real > 0 and num_fake > 0:
+        weight_real = total_train / (2.0 * num_real)
+        weight_fake = total_train / (2.0 * num_fake)
+        class_weights = torch.FloatTensor([weight_real, weight_fake]).to(DEVICE)
+        print(f"Applying Class Weights -> Real: {weight_real:.2f}, Fake: {weight_fake:.2f}")
+        criterion_auth = nn.CrossEntropyLoss(weight=class_weights)
+    else:
+        criterion_auth = nn.CrossEntropyLoss()
+        
+    criterion_emo = nn.CrossEntropyLoss()
+        
+    optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4) # AdamW for better regularization
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=2)
+    
+    # Early Stopping Config
+    early_stopping_patience = 5
+    epochs_no_improve = 0
     
     # Mixed precision training
     use_cuda = torch.cuda.is_available()
     scaler = torch.amp.GradScaler('cuda') if use_cuda else None
     
-    print("Starting training...")
+    print("Starting Advanced Training with Validation & Early Stopping...")
     print("=" * 60)
     
     best_val_acc = 0.0
@@ -369,10 +400,10 @@ def main():
         print("-" * 60)
         
         # Train
-        train_acc = train_epoch(model, train_loader, criterion, optimizer, DEVICE, scaler)
+        train_acc = train_epoch(model, train_loader, criterion_auth, criterion_emo, optimizer, DEVICE, scaler)
         
         # Validate
-        val_loss, val_acc_auth, val_acc_emo = validate(model, val_loader, criterion, DEVICE)
+        val_loss, val_acc_auth, val_acc_emo = validate(model, val_loader, criterion_auth, criterion_emo, DEVICE)
         
         print(f"\nEpoch {epoch + 1} Summary:")
         print(f"  Val Loss: {val_loss:.4f}")
@@ -396,12 +427,20 @@ def main():
         # Save best model
         if val_acc_auth > best_val_acc:
             best_val_acc = val_acc_auth
+            epochs_no_improve = 0
             torch.save({
                 'epoch': epoch + 1,
                 'model_state_dict': model.state_dict(),
                 'val_acc': val_acc_auth,
             }, "video_model_best.pth")
             print(f"  ⭐ New best model! Auth Accuracy: {val_acc_auth:.2f}%")
+        else:
+            epochs_no_improve += 1
+            print(f"  No improvement for {epochs_no_improve} epoch(s).")
+            
+        if epochs_no_improve >= early_stopping_patience:
+            print(f"\n🛑 Early stopping triggered after {epoch+1} epochs! Prevented overfitting.")
+            break
     
     total_time = time.time() - start_time
     print("\n" + "=" * 60)
