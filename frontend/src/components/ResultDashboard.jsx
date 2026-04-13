@@ -70,7 +70,7 @@ export default function ResultDashboard({ result, onReset }) {
     // Infer media type
     const isVideo = !!result.frames_processed;
     const isAudio = result.forensics?.vocal_jitter !== undefined;
-    const isText  = result.forensics?.complexity_index !== undefined;
+    const isText  = result.forensics?.burstiness !== undefined;
     const isImage = !isVideo && !isAudio && !isText;
     const mediaType = isVideo ? 'video' : isAudio ? 'audio' : isText ? 'text' : 'image';
 
@@ -260,11 +260,32 @@ export default function ResultDashboard({ result, onReset }) {
 
                         {/* ── IMAGE artifacts: Grad-CAM, ELA, FFT, Noise ── */}
                         {(isImage || (isVideo && forensics.heatmap)) && (
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                <ForensicImage b64={forensics.heatmap} title="Attention Map (Grad-CAM)" subtitle="XAI" icon={Eye} />
-                                {isImage && <ForensicImage b64={forensics.ela} title="Error Level Analysis" subtitle="ELA" icon={Layers} accentColor="var(--secondary)" />}
-                                {isImage && <ForensicImage b64={forensics.fft} title="FFT Frequency Map" subtitle="Spectral" icon={Radio} accentColor="#ff9063" />}
-                                {isImage && <ForensicImage b64={forensics.noise} title="Noise Print" subtitle="High-Freq" icon={Cpu} accentColor="#c87eff" />}
+                            <div className="space-y-4">
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                    <ForensicImage b64={forensics.heatmap} title="Attention Map (Grad-CAM)" subtitle="XAI" icon={Eye} />
+                                    {isImage && <ForensicImage b64={forensics.ela} title="Error Level Analysis" subtitle="ELA" icon={Layers} accentColor="var(--secondary)" />}
+                                    {isImage && <ForensicImage b64={forensics.fft} title="FFT Frequency Map" subtitle="Spectral" icon={Radio} accentColor="#ff9063" />}
+                                    {isImage && <ForensicImage b64={forensics.noise} title="Noise Print" subtitle="High-Freq" icon={Cpu} accentColor="#c87eff" />}
+                                </div>
+                                {forensics.spectral_anomaly_score !== undefined && (
+                                    <div className="p-5 rounded-2xl border bg-black/20" style={{ borderColor: 'var(--border-subtle)' }}>
+                                        <div className="flex justify-between items-center mb-3">
+                                            <div className="flex items-center gap-2">
+                                                <Layers size={14} style={{ color: '#c87eff' }} />
+                                                <span className="text-[10px] font-black uppercase tracking-widest" style={{ color: 'var(--text-main)' }}>Frequency Domain Forgery Score (DCT)</span>
+                                            </div>
+                                            <span className="text-sm font-black mono" style={{ color: '#c87eff' }}>{forensics.spectral_anomaly_score.toFixed(4)}</span>
+                                        </div>
+                                        <div className="h-2 rounded-full bg-white/5 overflow-hidden">
+                                            <motion.div 
+                                                initial={{ width: 0 }} 
+                                                animate={{ width: `${Math.min(100, forensics.spectral_anomaly_score * 20)}%` }}
+                                                className="h-full" 
+                                                style={{ background: 'linear-gradient(90deg, #c87eff, var(--primary))' }}
+                                            />
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         )}
 
@@ -332,9 +353,9 @@ export default function ResultDashboard({ result, onReset }) {
                                         </div>
                                     </div>
                                     <div className="bg-black/20 p-4 rounded-xl space-y-2 border" style={{ borderColor: 'var(--border-subtle)' }}>
-                                        <div className="text-[10px] font-bold uppercase" style={{ color: 'var(--text-dim)' }}>Spectral Floor</div>
-                                        <div className="text-sm font-bold uppercase mt-2" style={{ color: 'var(--secondary)' }}>{forensics.spectral_floor || 'Unknown'}</div>
-                                        <div className="text-[10px]" style={{ color: 'var(--text-dim)' }}>Background noise profile</div>
+                                        <div className="text-[10px] font-bold uppercase" style={{ color: 'var(--text-dim)' }}>Acoustic Complexity</div>
+                                        <div className="text-3xl font-black" style={{ color: 'var(--secondary)' }}>{forensics.complexity_index?.toFixed(1) || '0.0'}</div>
+                                        <div className="text-[10px]" style={{ color: 'var(--text-dim)' }}>Spectral harmony richness</div>
                                     </div>
                                 </div>
                             </div>
@@ -355,15 +376,14 @@ export default function ResultDashboard({ result, onReset }) {
                                 )}
                                 <div className="grid grid-cols-2 gap-4">
                                     <div className="bg-black/20 p-4 rounded-xl border" style={{ borderColor: 'var(--border-subtle)' }}>
-                                        <div className="text-[10px] font-bold uppercase mb-1" style={{ color: 'var(--text-dim)' }}>Complexity Index</div>
-                                        <div className="text-3xl font-black" style={{ color: 'var(--primary)' }}>{(forensics.complexity_index || 0).toFixed(2)}</div>
-                                        <div className="text-[10px] mt-1" style={{ color: 'var(--text-dim)' }}>Vocabulary richness & sentence depth</div>
+                                        <div className="text-[10px] font-bold uppercase mb-1" style={{ color: 'var(--text-dim)' }}>Linguistic Burstiness</div>
+                                        <div className="text-3xl font-black" style={{ color: 'var(--primary)' }}>{(forensics.burstiness || 0).toFixed(2)}</div>
+                                        <div className="text-[10px] mt-1" style={{ color: 'var(--text-dim)' }}>Low variance = AI machine writing</div>
                                     </div>
                                     <div className="bg-black/20 p-4 rounded-xl border" style={{ borderColor: 'var(--border-subtle)' }}>
-                                        <div className="text-[10px] font-bold uppercase mb-1" style={{ color: 'var(--text-dim)' }}>Structural Rigidity</div>
-                                        <div className={`text-sm font-bold mt-2 uppercase ${forensics.is_structured ? 'text-danger' : 'text-success'}`}>
-                                            {forensics.is_structured ? 'High (Machine-like)' : 'Normal (Human-like)'}
-                                        </div>
+                                        <div className="text-[10px] font-bold uppercase mb-1" style={{ color: 'var(--text-dim)' }}>Vocab Richness</div>
+                                        <div className="text-3xl font-black" style={{ color: 'var(--secondary)' }}>{pct(forensics.vocab_richness || 0)}%</div>
+                                        <div className="text-[10px] mt-1" style={{ color: 'var(--text-dim)' }}>Unique segment distribution depth</div>
                                     </div>
                                 </div>
                             </div>

@@ -1,7 +1,7 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-export default function ScannerView({ modality, progress }) {
+export default function ScannerView({ modality, progress, onBack }) {
     const percent = progress?.percent || 0;
     const status = progress?.status || "initializing";
 
@@ -65,6 +65,15 @@ export default function ScannerView({ modality, progress }) {
                     <span>Neural Engine v4.0</span>
                     <span>Live Telemetry Streams</span>
                 </div>
+
+                {/* Back / Cancel Button */}
+                <button 
+                    onClick={onBack} 
+                    className="mt-12 px-8 py-3 rounded-2xl border font-black text-sm uppercase tracking-widest transition-all hover:bg-white/5"
+                    style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-dim)' }}
+                >
+                    Cancel Analysis
+                </button>
             </div>
         </div>
     );

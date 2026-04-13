@@ -105,6 +105,25 @@ body {
   50%       { transform: translateY(-15px); }
 }
 
+/* ─── GLOW BUTTON ─── */
+.btn-glow {
+  background: linear-gradient(135deg, var(--pistachio), #5aaa80);
+  color: #000;
+  box-shadow: 0 0 15px var(--pistachio-glow);
+  border: none;
+  transition: all 0.3s ease;
+}
+
+.btn-glow:hover {
+  box-shadow: 0 0 30px var(--pistachio-glow);
+  transform: translateY(-2px) scale(1.05);
+}
+
+.light-theme .btn-glow {
+  background: linear-gradient(135deg, #7ec8a0, #60b686);
+  box-shadow: 0 4px 15px rgba(126, 200, 160, 0.4);
+}
+
 /* ─── UTILITIES ─── */
 .glass-panel {
   background: rgba(20, 20, 20, 0.7);

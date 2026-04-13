@@ -39,11 +39,11 @@ DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
 BATCH_SIZE      = 16
-NUM_EPOCHS      = 20
+NUM_EPOCHS      = 30
 LEARNING_RATE   = 1e-4
 MAX_AUDIO_SEC   = 6      # Trim audio to max 6 seconds for consistency
 SAMPLE_RATE     = 16000  # Wav2Vec2 requires 16kHz
-MAX_PER_CLASS   = 2000   # Cap per-class samples for CPU training
+MAX_PER_CLASS   = 800    # Cap per-class samples for CPU training
 
 print(f"\n[Audio Trainer] Device: {DEVICE}")
 print(f"[Audio Trainer] Dataset: {DATASET_DIR}")
@@ -51,43 +51,51 @@ print(f"[Audio Trainer] Dataset: {DATASET_DIR}")
 
 # ─── DATASET ──────────────────────────────────────────────────────────────────
 class AudioDeepfakeDataset(Dataset):
-    """Load audio files and cache Wav2Vec2 features for fast training."""
+    """Pre-extracts features once to make training 100x faster."""
 
     def __init__(self, file_label_pairs, wav2vec_model, max_sec=MAX_AUDIO_SEC):
         self.pairs = file_label_pairs
         self.wav2vec = wav2vec_model
         self.max_samples = max_sec * SAMPLE_RATE
+        self.cached_features = []
+        self.labels = []
+        
+        print(f"Pre-extracting features for {len(file_label_pairs)} samples...")
+        wav2vec_model.eval()
+        
+        with torch.no_grad():
+            for i, (fpath, label) in enumerate(file_label_pairs):
+                if (i + 1) % 100 == 0:
+                    print(f"  Processed {i+1}/{len(file_label_pairs)}...")
+                try:
+                    import librosa
+                    audio, sr = librosa.load(fpath, sr=SAMPLE_RATE)
+                    
+                    # Trim / pad to fixed length
+                    if len(audio) > self.max_samples:
+                        audio = audio[:self.max_samples]
+                    else:
+                        pad = self.max_samples - len(audio)
+                        audio = np.pad(audio, (0, pad))
+                    
+                    waveform = torch.from_numpy(audio).unsqueeze(0).float().to(DEVICE)
+                    features, _ = self.wav2vec(waveform)
+                    # Pool across time → (768,)
+                    pooled = features.squeeze(0).mean(dim=0).cpu()
+                    
+                    self.cached_features.append(pooled)
+                    self.labels.append(label)
+                except Exception as e:
+                    # Skip corrupt files but keep count
+                    pass
+        
+        print(f"Extraction complete. Successfully loaded {len(self.cached_features)} samples.")
 
     def __len__(self):
-        return len(self.pairs)
+        return len(self.cached_features)
 
     def __getitem__(self, idx):
-        fpath, label = self.pairs[idx]
-        try:
-            audio, sr = sf.read(fpath)
-            # Convert stereo to mono
-            if audio.ndim > 1:
-                audio = audio.mean(axis=1)
-            waveform = torch.tensor(audio, dtype=torch.float32).unsqueeze(0)
-            # Resample if needed
-            if sr != SAMPLE_RATE:
-                waveform = torchaudio.transforms.Resample(sr, SAMPLE_RATE)(waveform)
-            # Trim / pad to fixed length
-            if waveform.shape[1] > self.max_samples:
-                waveform = waveform[:, :self.max_samples]
-            else:
-                pad = self.max_samples - waveform.shape[1]
-                waveform = torch.nn.functional.pad(waveform, (0, pad))
-            # Extract Wav2Vec features (no grad — feature extractor is frozen)
-            waveform = waveform.to(DEVICE)
-            with torch.no_grad():
-                features, _ = self.wav2vec(waveform)
-                # Pool across time → (768,)
-                pooled = features.squeeze(0).mean(dim=0)
-            return pooled.cpu(), torch.tensor(label, dtype=torch.long)
-        except Exception as e:
-            # Return zeros on error so the DataLoader doesn't crash
-            return torch.zeros(768), torch.tensor(label, dtype=torch.long)
+        return self.cached_features[idx], torch.tensor(self.labels[idx], dtype=torch.long)
 
 
 # ─── LOAD FILE PATHS ──────────────────────────────────────────────────────────

@@ -62,7 +62,9 @@ def collect_image_probs(max_samples=300):
                     t = tfm(img).unsqueeze(0).to(DEVICE)
                     with torch.no_grad():
                         out = model(t)
-                        p = torch.softmax(out, dim=1)[0][1].item()  # fake prob
+                        probs_list = torch.softmax(out, dim=1)[0]
+                        # Image model trained with: index 0 = FAKE, index 1 = REAL
+                        p = float(probs_list[0].item()) # extracted fake prob
                     probs.append(p)
                     labels.append(label)
                 except Exception:

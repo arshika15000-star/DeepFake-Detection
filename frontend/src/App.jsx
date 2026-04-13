@@ -624,6 +624,14 @@ export default function App() {
     localStorage.setItem('df_theme', isDark ? 'dark' : 'light');
   }, [isDark]);
   const toggleTheme = () => setIsDark(v => !v);
+  
+  const resetToHome = () => {
+    setAnalysisResult(null);
+    setSelectedModality(null);
+    setView('home');
+    setProgress({ percent: 0, status: 'initializing' });
+    window.scrollTo(0, 0);
+  };
 
   const pollJobStatus = async (jobId) => {
     try {
@@ -765,7 +773,7 @@ export default function App() {
             </>
           ) : (
             <>
-              <button onClick={() => { const txt = prompt('Paste your text for semantic AI analysis:'); if (txt) startAnalysis(txt, 'text'); }}
+              <button id="paste-text-btn" onClick={() => { const txt = prompt('Paste your text for semantic AI analysis:'); if (txt) startAnalysis(txt, 'text'); }}
                 className="w-full py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all hover:opacity-90"
                 style={{ background: c.bg, color: '#fff' }}>
                 <Type size={18} /> Paste Text
@@ -824,7 +832,7 @@ export default function App() {
 
       {/* ─── NAVBAR ─── */}
       <nav className="relative z-50 flex items-center justify-between px-10 py-5">
-        <div className="flex items-center gap-4 cursor-pointer" onClick={() => setView('home')}>
+        <div className="flex items-center gap-4 cursor-pointer" onClick={resetToHome}>
           <div className="w-12 h-12 rounded-full flex items-center justify-center text-xl font-bold text-black"
             style={{ backgroundColor: '#7ec8a0', boxShadow: '0 0 20px rgba(126,200,160,0.6)' }}>DF</div>
           <span className="text-3xl font-bold tracking-wide"
@@ -865,6 +873,13 @@ export default function App() {
             style={{ background: 'linear-gradient(135deg,#6390ff,#4a72d1)', color: '#fff' }}>
             Contact Us
           </button>
+          
+          {view !== 'home' && (
+            <button onClick={resetToHome} 
+              className="px-5 py-2 rounded-full text-sm font-black border border-pistachio text-pistachio hover:bg-pistachio/10 transition-all">
+              Back to Home
+            </button>
+          )}
         </div>
       </nav>
 
@@ -888,20 +903,20 @@ export default function App() {
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-8 w-full pb-20">
               <ModalityCard modality="image" icon={UploadCloud} title="Image" uploadAccept="image/*" uploadId="image-upload"
                 captureBtnText="Live Snapshot" captureIcon={Camera}
-                description="Detect AI-generated faces, GAN artifacts, and manipulated pixels in photos." />
+                description="High-velocity EfficientNet-V2 with spectral DCT boosters and forensic ELA heatmaps." />
               <ModalityCard modality="video" icon={Play} title="Video" uploadAccept="video/*" uploadId="video-upload"
                 captureBtnText="Record Video" captureIcon={Camera}
-                description="Analyze temporal coherence, rPPG pulse, and frame-by-frame deepfake signatures." />
+                description="Multimodal fusion (visual + audio) with ResNet50-LSTM temporal synchronization." />
               <ModalityCard modality="audio" icon={Mic} title="Audio" uploadAccept="audio/*" uploadId="audio-upload"
                 captureBtnText="Record Audio" captureIcon={Mic}
-                description="Extract acoustic fingerprints and detect cloned or synthetic AI voices." />
+                description="Wav2Vec 2.0 Feature correlation engine to distinguish human from cloned AI speech." />
               <ModalityCard modality="text" icon={Type} title="Text"
-                description="Evaluate linguistic syntax, perplexity, and AI generator writing patterns." />
+                description="Advanced semantic analysis with RoBERTa transformers to identify AI writing patterns." />
             </div>
             <LandingContent isDark={isDark} />
           </div>
         )}
-        {view === 'scanning' && selectedModality && <ScannerView modality={selectedModality} progress={progress} />}
+        {view === 'scanning' && selectedModality && <ScannerView modality={selectedModality} progress={progress} onBack={resetToHome} />}
         {isCaptureViewOpen && (
           <CaptureView modality={selectedModality}
             onCapture={file => { setIsCaptureViewOpen(false); startAnalysis(file, selectedModality); }}
@@ -909,7 +924,10 @@ export default function App() {
         )}
         {view === 'result' && analysisResult && (
           <div className="w-full h-[85vh] overflow-y-auto custom-scrollbar relative">
-            <ResultDashboard result={analysisResult} onReset={() => setView('home')} />
+            <ResultDashboard 
+              result={analysisResult} 
+              onReset={resetToHome} 
+            />
           </div>
         )}
         {view === 'analytics' && <AnalyticsDashboard onBack={() => setView('home')} isDark={isDark} />}
