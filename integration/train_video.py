@@ -19,7 +19,7 @@ BATCH_SIZE = 16
 NUM_EPOCHS = 20
 LEARNING_RATE = 0.0001
 IMAGE_SIZE = (224, 224)
-FRAMES_PER_VIDEO = 10  # Extract 10 frames from each video
+FRAMES_PER_VIDEO = 15  # Extract 15 frames from each video (Increased for more temporal detail)
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 VIDEO_ROOT = r"c:\Users\Vanshina Saxena\OneDrive\Desktop\Deepfake Detection\dataset\SDFVD\SDFVD"
 
@@ -190,7 +190,7 @@ def load_video_dataset():
     # Load fake videos (label = 1)
     if os.path.exists(fake_dir):
         for video_file in os.listdir(fake_dir):
-            if video_file.endswith('.mp4'):
+            if video_file.lower().endswith(('.mp4', '.avi', '.mov', '.webm', '.mkv')):
                 v_path = os.path.join(fake_dir, video_file)
                 video_paths.append(v_path)
                 auth_labels.append(1)  # Fake
@@ -199,7 +199,7 @@ def load_video_dataset():
     # Load real videos (label = 0)
     if os.path.exists(real_dir):
         for video_file in os.listdir(real_dir):
-            if video_file.endswith('.mp4'):
+            if video_file.lower().endswith(('.mp4', '.avi', '.mov', '.webm', '.mkv')):
                 v_path = os.path.join(real_dir, video_file)
                 video_paths.append(v_path)
                 auth_labels.append(0)  # Real
@@ -362,6 +362,14 @@ def main():
     print("Building model...")
     model = DeepfakeDetector(num_frames=FRAMES_PER_VIDEO).to(DEVICE)
     
+    # [Improved Learning] Freeze lower ResNet50 layers, but unfreeze 'Layer 4' for fine-tuning
+    for name, param in model.feature_extractor.named_parameters():
+        if "layer4" in name:
+            param.requires_grad = True
+        else:
+            param.requires_grad = False
+    print("  [Fine-tune] ResNet50 'Layer 4' enabled. Lower layers frozen.")
+    
     # Calculate Class Weights for Imbalanced Dataset
     num_real = len([x for x in train_auth if x == 0])
     num_fake = len([x for x in train_auth if x == 1])
@@ -377,8 +385,15 @@ def main():
         criterion_auth = nn.CrossEntropyLoss()
         
     criterion_emo = nn.CrossEntropyLoss()
-        
-    optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4) # AdamW for better regularization
+    
+    # [Step 2] Only train non-frozen layers (Layer 4 + LSTM + Classifier)
+    optimizer = optim.AdamW([
+        {'params': [p for n, p in model.feature_extractor.named_parameters() if "layer4" in n], 'lr': 1e-5}, 
+        {'params': model.lstm.parameters(), 'lr': 1e-4},
+        {'params': model.classifier.parameters(), 'lr': 1e-4},
+        {'params': model.emotion_classifier.parameters(), 'lr': 1e-4}
+    ], weight_decay=1e-3)
+    
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=2)
     
     # Early Stopping Config
@@ -433,13 +448,13 @@ def main():
                 'model_state_dict': model.state_dict(),
                 'val_acc': val_acc_auth,
             }, "video_model_best.pth")
-            print(f"  ⭐ New best model! Auth Accuracy: {val_acc_auth:.2f}%")
+            print(f"  New best model! Auth Accuracy: {val_acc_auth:.2f}%")
         else:
             epochs_no_improve += 1
             print(f"  No improvement for {epochs_no_improve} epoch(s).")
             
         if epochs_no_improve >= early_stopping_patience:
-            print(f"\n🛑 Early stopping triggered after {epoch+1} epochs! Prevented overfitting.")
+            print(f"\nEarly stopping triggered after {epoch+1} epochs! Prevented overfitting.")
             break
     
     total_time = time.time() - start_time
@@ -494,7 +509,7 @@ def main():
     plt.ylabel('Actual')
     plt.xlabel('Predicted')
     plt.savefig('video_confusion_matrix.png')
-    print("  ⭐ Confusion matrix saved to video_confusion_matrix.png")
+    print("  Confusion matrix saved to video_confusion_matrix.png")
     
     # Save final model
     torch.save(model.state_dict(), "video_model_final.pth")

@@ -5,10 +5,20 @@
 @tailwind utilities;
 
 :root {
+  --primary: #7ec8a0;
+  --primary-glow: rgba(126, 200, 160, 0.4);
+  --secondary: #6390ff;
+  --secondary-glow: rgba(99, 144, 255, 0.4);
+  --accent: #c87eff;
+  --bg-body: #000000;
+  --card-bg: rgba(255, 255, 255, 0.05);
+  --border-subtle: rgba(255, 255, 255, 0.1);
+  --text-main: #ffffff;
+  --text-dim: #94a3b8;
+  
   --pistachio: #7ec8a0;
   --pistachio-glow: rgba(126, 200, 160, 0.5);
   --dark-bg: #000000;
-  --text-main: #ffffff;
 }
 
 /* ─── SMOOTH THEME TRANSITION ─── */
@@ -134,6 +144,15 @@ body {
 /* ════════════════════════════════════════
    LIGHT THEME
 ════════════════════════════════════════ */
+.light-theme {
+  --bg-body: #f8fafc;
+  --card-bg: rgba(255, 255, 255, 0.85);
+  --border-subtle: rgba(126, 200, 160, 0.2);
+  --text-main: #0f172a;
+  --text-dim: #64748b;
+  --dark-bg: #f8fafc;
+}
+
 .light-theme .star-bg {
   background: linear-gradient(135deg, #e8f5ee 0%, #eef2ff 50%, #fdf4ff 100%);
 }
@@ -310,6 +329,54 @@ body {
 .custom-scrollbar::-webkit-scrollbar { width: 6px; }
 .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
 .custom-scrollbar::-webkit-scrollbar-thumb { background: #7ec8a0; border-radius: 4px; }
+
+/* ─── PREMIUM UI UTILITIES ─── */
+.glass-card {
+  background: var(--card-bg);
+  backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid var(--border-subtle);
+  transition: all 0.3s cubic-bezier(0.19, 1, 0.22, 1);
+}
+
+.glass-card:hover {
+  border-color: var(--primary-glow);
+  box-shadow: 0 20px 40px rgba(0,0,0,0.4);
+}
+
+.neon-border {
+  position: relative;
+  overflow: hidden;
+}
+
+.neon-border::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  background: linear-gradient(90deg, transparent, var(--primary), transparent);
+  z-index: -1;
+  animation: border-rotate 4s linear infinite;
+}
+
+@keyframes border-rotate {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(255,255,255,0) 0%,
+    rgba(255,255,255,0.05) 50%,
+    rgba(255,255,255,0) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 2s infinite;
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
 
 @keyframes scan-line {
   0%   { top: 0%;   opacity: 0; }

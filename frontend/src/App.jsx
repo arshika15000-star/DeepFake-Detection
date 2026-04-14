@@ -597,6 +597,9 @@ export default function App() {
   const [progress, setProgress] = useState({ percent: 0, status: 'initializing' });
   const [errorMsg, setErrorMsg] = useState(null);
 
+  const [showTextPaste, setShowTextPaste] = useState(false);
+  const [pasteContent, setPasteContent] = useState('');
+
   const showError = (msg) => {
     setErrorMsg(msg);
     setView('home');
@@ -738,12 +741,12 @@ export default function App() {
         style={{ borderColor: c.border, boxShadow: `0 4px 30px ${c.glow}00` }}
         onMouseEnter={e => e.currentTarget.style.boxShadow = `0 4px 30px ${c.glow}`}
         onMouseLeave={e => e.currentTarget.style.boxShadow = `0 4px 30px ${c.glow}00`}>
-        <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity"
+        <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"
           style={{ backgroundImage: `linear-gradient(to bottom, ${c.accent}18, transparent)` }} />
         <Icon size={48} className="mb-4" style={{ color: c.accent }} />
         <h2 className="text-2xl font-bold mb-2">{title}</h2>
         <p className="text-sm text-gray-400 mb-6 flex-1">{description}</p>
-        <div className="w-full space-y-3 z-10">
+        <div className="w-full space-y-3 z-10 relative">
           {modality !== 'text' ? (
             <>
               <button onClick={() => document.getElementById(uploadId).click()}
@@ -773,7 +776,7 @@ export default function App() {
             </>
           ) : (
             <>
-              <button id="paste-text-btn" onClick={() => { const txt = prompt('Paste your text for semantic AI analysis:'); if (txt) startAnalysis(txt, 'text'); }}
+              <button id="paste-text-btn" onClick={() => { console.log("Opening text paste modal..."); setShowTextPaste(true); }}
                 className="w-full py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all hover:opacity-90"
                 style={{ background: c.bg, color: '#fff' }}>
                 <Type size={18} /> Paste Text
@@ -822,6 +825,51 @@ export default function App() {
       {showForgotPwd && (
         <ForgotPasswordModal isDark={isDark}
           onClose={() => { setShowForgotPwd(false); setShowAuth(true); }} />
+      )}
+
+      {showTextPaste && (
+        <div className="fixed inset-0 z-[400] flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
+          <div className="bg-[#0f172a] border border-[#c87eff]/40 w-full max-w-2xl rounded-3xl p-8 shadow-2xl fade-up">
+            <div className="flex justify-between items-center mb-6">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: 'rgba(200,126,255,0.15)', border: '1px solid rgba(200,126,255,0.3)' }}>
+                  <Type size={20} style={{ color: '#c87eff' }} />
+                </div>
+                <div>
+                  <h2 className="text-xl font-bold text-white">Semantic Text Analysis</h2>
+                  <p className="text-xs text-gray-400">Detect AI-generated patterns and LLM signatures.</p>
+                </div>
+              </div>
+              <button onClick={() => setShowTextPaste(false)} className="text-gray-500 hover:text-white transition-colors">
+                <X size={20} />
+              </button>
+            </div>
+            <textarea
+              value={pasteContent}
+              onChange={e => setPasteContent(e.target.value)}
+              placeholder="Paste the text you want to analyze here... (e.g. news articles, emails, or chat logs)"
+              className="w-full h-64 bg-black/40 border border-white/10 rounded-2xl p-4 text-sm text-gray-200 focus:outline-none focus:border-[#c87eff]/60 transition-colors resize-none mb-6"
+            />
+            <div className="flex gap-4">
+              <button onClick={() => setShowTextPaste(false)} className="flex-1 py-3 rounded-xl font-bold text-gray-400 hover:text-white transition-colors">
+                Cancel
+              </button>
+              <button 
+                disabled={!pasteContent.trim()}
+                onClick={() => {
+                  if (pasteContent.trim()) {
+                    startAnalysis(pasteContent, 'text');
+                    setShowTextPaste(false);
+                    setPasteContent('');
+                  }
+                }}
+                className={`flex-1 py-3 rounded-xl font-bold text-white transition-all ${!pasteContent.trim() ? 'opacity-30 grayscale cursor-not-allowed' : 'hover:scale-105 active:scale-95'}`}
+                style={{ background: 'linear-gradient(135deg,#c87eff,#9d58cc)' }}>
+                Analyze Semantic Patterns
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {isDragging && (

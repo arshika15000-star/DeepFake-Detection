@@ -8,46 +8,49 @@ from pathlib import Path
 
 # Configuration
 IMAGE_SIZE = (224, 224)
-FRAMES_PER_VIDEO = 10
+FRAMES_PER_VIDEO = 15
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 VIDEO_ROOT = r"c:\Users\Vanshina Saxena\OneDrive\Desktop\Deepfake Detection\dataset\SDFVD\SDFVD"
 
 class DeepfakeDetector(nn.Module):
-    """Model that processes multiple frames from a video"""
+    """Refined Model with ResNet50 + Bi-LSTM for Deepfake Detection"""
     
     def __init__(self, num_frames=10):
         super(DeepfakeDetector, self).__init__()
         
-        # Upgraded to ResNet50 and Bidirectional LSTM for higher accuracy
+        # Backbone: ResNet50
         base_model = models.resnet50(pretrained=True)
         self.feature_extractor = nn.Sequential(*list(base_model.children())[:-2])
         self.avgpool = nn.AdaptiveAvgPool2d(1)
         
+        # Temporal: High-Capacity Bidirectional LSTM
         # ResNet50 outputs 2048 features
         self.lstm = nn.LSTM(input_size=2048, hidden_size=512, num_layers=2, bidirectional=True, batch_first=True, dropout=0.5)
-        self.dropout = nn.Dropout(0.5)
-        self.fc1 = nn.Linear(512 * 2, 2) # Authenticity
-        self.fc2 = nn.Linear(512 * 2, 7) # Emotion
         
-        # Authenticity Classification head (Real vs Fake)
+        self.dropout = nn.Dropout(p=0.5)
+        
+        # Authenticity Classification head (Sequential with BatchNorm for stability)
         self.classifier = nn.Sequential(
-            nn.Linear(512, 128),
-            nn.BatchNorm1d(128),
+            nn.Linear(512 * 2, 256),  # 512*2 because bidirectional = 1024
+            nn.BatchNorm1d(256),
             nn.ReLU(),
             nn.Dropout(0.5),
-            nn.Linear(128, 2)
+            nn.Linear(256, 2)         # 2 classes: REAL / FAKE
         )
-
-        # Emotion Classification head (Multi-task tasking)
-        # 7 Emotions: 0:Angry, 1:Disgust, 2:Fear, 3:Happy, 4:Neutral, 5:Sad, 6:Surprise
+        
+        # Emotion Classification head (Optional/Secondary)
         self.emotion_classifier = nn.Sequential(
-            nn.Linear(512, 128),
-            nn.BatchNorm1d(128),
+            nn.Linear(512 * 2, 256),
+            nn.BatchNorm1d(256),
             nn.ReLU(),
             nn.Dropout(0.3),
-            nn.Linear(128, 7)
+            nn.Linear(256, 7)
         )
-    
+        
+        # Legacy pointers to keep compatibility if needed elsewhere
+        self.fc1 = None 
+        self.fc2 = None
+
     def forward(self, x):
         # x shape: (batch, frames, channels, height, width)
         batch_size, num_frames, c, h, w = x.size()
@@ -56,18 +59,19 @@ class DeepfakeDetector(nn.Module):
         x = x.view(batch_size * num_frames, c, h, w)
         
         # Extract features from each frame
-        features = self.feature_extractor(x)  # (batch*frames, 512, 7, 7) for 224x224
-        features = self.avgpool(features)     # (batch*frames, 512, 1, 1)
-        features = features.view(batch_size, num_frames, -1)  # (batch, frames, 512)
+        features = self.feature_extractor(x)  # (batch*frames, 2048, 7, 7)
+        features = self.avgpool(features)     # (batch*frames, 2048, 1, 1)
+        features = features.view(batch_size, num_frames, 2048)
         
         # Process temporal sequence with LSTM
         lstm_out, _ = self.lstm(features)
-        # Use only the last hidden state for classification
-        last_hidden = lstm_out[:, -1, :]
+        
+        # Use only the last hidden state for classification (contains both directions)
+        last_hidden = lstm_out[:, -1, :] # (batch, 1024)
         last_hidden = self.dropout(last_hidden)
         
-        authen_out = self.fc1(last_hidden)
-        emotion_out = self.fc2(last_hidden)
+        authen_out = self.classifier(last_hidden)
+        emotion_out = self.emotion_classifier(last_hidden)
         
         return authen_out, emotion_out
 

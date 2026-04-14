@@ -996,18 +996,23 @@ def _process_video(temp_path, job_id):
             emotion_conf = float(emotion_probs[emotion_idx].item())
             
             # Combine Visual + Audio + Spectral signals
+            # IMPROVEMENT: If spectral artifacts are low, don't penalize the total score
+            # (which was previously causing "Always Real" bias). Use them as a booster.
             if has_audio:
-                # Weighted fusion: Visual(60%) + Audio(20%) + Spectral(20%)
-                # Visual given higher weight as it's the primary deepfake indicator in video
-                fake_prob = (vis_fake_prob * 0.6) + (audio_fake_prob * 0.2) + (spectral_bias * 0.2)
-                findings.append(f"Multimodal Fusion: Visual AI ({vis_fake_prob:.1%}) + Audio AI ({audio_fake_prob:.1%}) + Spectral Artifacts ({spectral_bias*100/0.3:.1f}%)")
+                # Weighted fusion: Visual(70%) + Audio(30%)
+                # Spectral bias only adds if it detected something (boost mode)
+                base_fake_prob = (vis_fake_prob * 0.7) + (audio_fake_prob * 0.3)
+                fake_prob = max(base_fake_prob, (base_fake_prob * 0.8) + (spectral_bias * 0.2))
+                findings.append(f"Multimodal Fusion: Visual AI ({vis_fake_prob:.1%}) + Audio AI ({audio_fake_prob:.1%})")
+                if spectral_bias > 0.05:
+                    findings.append(f"Spectral Signal Booster: +{spectral_bias*100:.1f}% confidence from frequency artifacts")
             else:
-                # Visual(70%) + Spectral(30%)
-                fake_prob = (vis_fake_prob * 0.7) + (spectral_bias * 0.3)
+                # Visual only, with spectral booster
+                fake_prob = max(vis_fake_prob, (vis_fake_prob * 0.7) + (spectral_bias * 0.3))
             
             real_prob = 1.0 - fake_prob
-            # Using 0.50 as a more sensitive base threshold for better detection
-            base_threshold = min(optimal_threshold, 0.55)
+            # Using 0.48 as a more sensitive base threshold for better detection on slightly uncertain models
+            base_threshold = min(optimal_threshold, 0.48)
             predicted_class = 1 if fake_prob >= base_threshold else 0
             
         # Extract Forensic Metadata
@@ -1034,7 +1039,8 @@ def _process_video(temp_path, job_id):
         # Real Video Inference
         # Use optimal threshold for calibration
         # Final Video Decision
-        final_prediction = "FAKE" if fake_prob >= optimal_threshold else "REAL"
+        # Use the locally calibrated base_threshold for higher sensitivity
+        final_prediction = "FAKE" if fake_prob >= base_threshold else "REAL"
         final_confidence = float(fake_prob if final_prediction == "FAKE" else real_prob)
 
         result_data = {
