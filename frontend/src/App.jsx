@@ -698,21 +698,35 @@ export default function App() {
     image: ['image/jpeg', 'image/png', 'image/webp', 'image/bmp'],
     video: ['video/mp4', 'video/avi', 'video/quicktime', 'video/x-matroska', 'video/webm'],
     audio: ['audio/wav', 'audio/mpeg', 'audio/mp4', 'audio/flac', 'audio/webm'],
+    text: ['text/plain', 'text/markdown'],
   };
   const MAX_FILE_MB = { image: 10, video: 200, audio: 50 };
 
   const handleFileUpload = (e, modality) => {
     const f = e.target.files[0]; if (!f) return;
-    const allowed = ALLOWED_TYPES[modality] || [], maxMB = MAX_FILE_MB[modality] || 100, sizeMB = f.size / (1024 * 1024);
-    if (!allowed.includes(f.type)) {
-      showError(`❌ Invalid file type for ${modality}. Allowed: ${allowed.map(t => t.split('/')[1].toUpperCase()).join(', ')}`);
-      e.target.value = ''; return;
-    }
+    const allowed = ALLOWED_TYPES[modality] || ['.text/plain', '.md'], maxMB = MAX_FILE_MB[modality] || 10, sizeMB = f.size / (1024 * 1024);
+    
+    // Check size first
     if (sizeMB > maxMB) {
       showError(`❌ File too large: ${sizeMB.toFixed(1)} MB. Maximum for ${modality} is ${maxMB} MB.`);
       e.target.value = ''; return;
     }
-    startAnalysis(f, modality);
+
+    if (modality === 'text') {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const content = event.target.result;
+        startAnalysis(content, 'text');
+      };
+      reader.readAsText(f);
+      e.target.value = '';
+    } else {
+      if (!allowed.includes(f.type)) {
+        showError(`❌ Invalid file type for ${modality}. Allowed: ${allowed.map(t => t.split('/')[1].toUpperCase()).join(', ')}`);
+        e.target.value = ''; return;
+      }
+      startAnalysis(f, modality);
+    }
   };
 
   const handleDragOver = e => { e.preventDefault(); if (!isDragging) setIsDragging(true); };
@@ -723,7 +737,8 @@ export default function App() {
     if (f.type.startsWith('image/')) handleFileUpload({ target: { files: [f] } }, 'image');
     else if (f.type.startsWith('video/')) handleFileUpload({ target: { files: [f] } }, 'video');
     else if (f.type.startsWith('audio/')) handleFileUpload({ target: { files: [f] } }, 'audio');
-    else showError('❌ Unsupported file type. Drag an image, video, or audio file.');
+    else if (f.type.startsWith('text/') || f.name.endsWith('.md')) handleFileUpload({ target: { files: [f] } }, 'text');
+    else showError('❌ Unsupported file type. Drag an image, video, audio, or text file.');
   };
 
   const modalityColors = {
@@ -781,10 +796,12 @@ export default function App() {
                 style={{ background: c.bg, color: '#fff' }}>
                 <Type size={18} /> Paste Text
               </button>
-              <button className="w-full py-3 rounded-xl font-bold border opacity-40 cursor-not-allowed flex items-center justify-center gap-2"
-                style={{ borderColor: c.accent, color: c.accent }}>
-                <UploadCloud size={18} /> Upload Document (Coming Soon)
+              <button id="upload-doc-btn" onClick={() => document.getElementById('text-upload').click()}
+                className="w-full py-3 rounded-xl font-bold border flex items-center justify-center gap-2 transition-all hover:opacity-90"
+                style={{ borderColor: c.accent, color: c.accent, background: `${c.accent}12` }}>
+                <UploadCloud size={18} /> Upload Document
               </button>
+              <input id="text-upload" type="file" accept=".txt,.md" className="hidden" onChange={e => handleFileUpload(e, modality)} />
             </>
           )}
         </div>
