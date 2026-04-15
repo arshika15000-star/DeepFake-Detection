@@ -248,3 +248,23 @@ document.getElementById('save-settings-btn').addEventListener('click', () => {
     checkBackendStatus();
   });
 });
+
+// --- INIT: CHECK FOR PENDING URL FROM CONTEXT MENU ---
+chrome.runtime.sendMessage({ type: 'GET_PENDING_URL' }, (response) => {
+  if (response && response.url) {
+    document.getElementById('media-url').value = response.url;
+    
+    // Auto-detect modality from URL extension
+    const url = response.url.toLowerCase();
+    if (url.match(/\.(jpg|jpeg|png|webp|bmp|gif)(\?|$)/)) {
+      setModality('image');
+    } else if (url.match(/\.(mp4|avi|mov|mkv|webm)(\?|$)/)) {
+      setModality('video');
+    } else if (url.match(/\.(wav|mp3|m4a|flac)(\?|$)/)) {
+      setModality('audio');
+    }
+    
+    // Auto-start analysis
+    analyzeUrl();
+  }
+});
