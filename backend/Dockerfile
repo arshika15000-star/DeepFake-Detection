@@ -11,8 +11,13 @@ RUN apt-get update && apt-get install -y \
     libsndfile1 \
     && rm -rf /var/lib/apt/lists/*
 
+# Create a non-root user that Hugging Face requires
+RUN useradd -m -u 1000 user
+USER user
+ENV PATH="/home/user/.local/bin:$PATH"
+
 # Copy requirements file first to leverage Docker cache
-COPY requirements.txt .
+COPY --chown=user requirements.txt .
 
 # Install dependencies
 # Using --extra-index-url is crucial here! It forces pip to download the much smaller 
@@ -21,10 +26,10 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
 
 # Copy the rest of the backend source code
-COPY . .
+COPY --chown=user . .
 
-# Expose the API port
-EXPOSE 8000
+# Expose the API port expected by Hugging Face Spaces
+EXPOSE 7860
 
 # Run the FastAPI server via uvicorn
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "7860"]
