@@ -116,8 +116,21 @@ class VideoFrameDataset(Dataset):
                 # Return a dummy tensor if video couldn't be read
                 frames = [np.zeros((224, 224, 3), dtype=np.uint8) for _ in range(self.frames_per_video)]
             
-            # Transform frames
-            if self.transform:
+            # --- CONSISTENT DATA AUGMENTATION ---
+            # Randomly determine augmentation parameters ONCE for the whole sequence
+            if self.transform and "Random" in str(self.transform):
+                # We need deterministic behavior for all frames in this item
+                import random
+                seed = random.randint(0, 1000000000)
+                
+                transformed_frames = []
+                for frame in frames:
+                    random.seed(seed)
+                    torch.manual_seed(seed)
+                    # Note: PIL/torchvision transforms use both random and torch.manual_seed
+                    transformed_frames.append(self.transform(frame))
+                frames = transformed_frames
+            elif self.transform:
                 frames = [self.transform(frame) for frame in frames]
             
             # Stack frames along a new dimension: (frames, channels, height, width)
@@ -132,18 +145,17 @@ class VideoFrameDataset(Dataset):
         return frames_tensor, auth_label, emotion_label
 
 def get_transforms():
-    """Advanced data augmentation for better generalization"""
+    """Consistent spatial transforms for video sequences"""
     return transforms.Compose([
         transforms.ToPILImage(),
         transforms.Resize((256, 256)),
-        transforms.RandomCrop(IMAGE_SIZE),
+        transforms.CenterCrop(IMAGE_SIZE), # Use center crop by default for faces
+        # Note: We now handle randomness at the dataset level for temporal consistency
         transforms.RandomHorizontalFlip(p=0.5),
-        transforms.RandomRotation(15),
-        transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.1),
-        transforms.RandomPerspective(distortion_scale=0.2, p=0.5),
+        transforms.RandomRotation(10),
+        transforms.ColorJitter(brightness=0.2, contrast=0.2),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        transforms.RandomErasing(p=0.2, scale=(0.02, 0.1)), # Occlusion robustness
     ])
 
 def get_test_transforms():

@@ -609,10 +609,58 @@ def update_job_progress(job_id, progress, status="processing", result=None, erro
         if result: jobs[job_id]["result"] = result
         if error: jobs[job_id]["error"] = error
 
-def extract_frames_from_video(video_path, num_frames=10, job_id=None):
-    """Extract frames from video. ROBUST: Re-detects face every few frames to handle motion."""
+def compute_temporal_consistency(frames):
+    """Compute frame-to-frame temporal consistency score.
+    Deepfakes often show unnatural flickering/inconsistency between frames.
+    Returns a fake_bias score (higher = more suspicious flickering)"""
+    if len(frames) < 2:
+        return 0.0, []
+    
+    diffs = []
+    for i in range(1, len(frames)):
+        f1 = frames[i-1].astype(np.float32)
+        f2 = frames[i].astype(np.float32)
+        # Mean absolute difference between consecutive frames
+        diff = np.mean(np.abs(f1 - f2))
+        diffs.append(diff)
+    
+    if not diffs:
+        return 0.0, []
+    
+    mean_diff = np.mean(diffs)
+    std_diff = np.std(diffs)
+    
+    findings = []
+    fake_bias = 0.0
+    
+    # Deepfakes: high variance (flickering) OR suspiciously low variance (frozen face)
+    cv_diff = std_diff / (mean_diff + 1e-6)  # Coefficient of variation
+    
+    if cv_diff > 0.5 and mean_diff > 8.0:
+        fake_bias += 0.15
+        findings.append(f"Temporal flicker detected: Coefficient of variation={cv_diff:.2f} (Deepfake hallmark)")
+    elif cv_diff < 0.05 and mean_diff < 2.0:
+        fake_bias += 0.10
+        findings.append(f"Suspiciously static face region: near-zero temporal variance ({mean_diff:.2f})")
+    
+    # Check for sudden jumps (boundary artifacts)
+    if diffs:
+        max_jump = max(diffs)
+        if max_jump > mean_diff * 3.5:
+            fake_bias += 0.10
+            findings.append(f"Temporal boundary artifact: sudden frame jump {max_jump:.1f} vs avg {mean_diff:.1f}")
+    
+    return min(0.35, fake_bias), findings
+
+
+def extract_frames_from_video(video_path, num_frames=15, job_id=None):
+    """Extract frames from video.
+    Returns BOTH face-cropped frames AND full-scene frames for TTA (Test-Time Augmentation).
+    Face detection runs periodically to handle motion.
+    """
     global face_detector, haar_detector
-    frames = []
+    face_frames = []   # Face-cropped frames
+    full_frames = []   # Full-scene frames
     cap = cv2.VideoCapture(video_path)
     
     if not cap.isOpened():
@@ -625,71 +673,87 @@ def extract_frames_from_video(video_path, num_frames=10, job_id=None):
         
     face_bbox = None
     crop_coords = None
+    # Sample slightly more frames evenly spread to improve temporal coverage
     frame_indices = np.linspace(0, total_frames - 1, num_frames, dtype=int)
     
     for i, idx in enumerate(frame_indices):
         cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
         ret, frame = cap.read()
         if not ret:
-            frames.append(np.zeros((224, 224, 3), dtype=np.uint8))
+            full_frames.append(np.zeros((224, 224, 3), dtype=np.uint8))
+            face_frames.append(np.zeros((224, 224, 3), dtype=np.uint8))
             continue
             
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h_img, w_img, _ = frame.shape
         
         # --- ROBUST FACE DETECTION ---
-        # Run detection on first frame OR if we haven't found a face yet
-        # OR periodically to handle motion (every 3 frames)
+        # Re-detect face every 3 frames to handle motion drift
         if i == 0 or crop_coords is None or i % 3 == 0:
             current_crop = None
             if face_detector:
-                results = face_detector.process(frame_rgb)
-                if results.detections:
-                    bbox = results.detections[0].location_data.relative_bounding_box
-                    x, y = int(bbox.xmin * w_img), int(bbox.ymin * h_img)
-                    box_w, box_h = int(bbox.width * w_img), int(bbox.height * h_img)
-                    
-                    padding = int(max(box_w, box_h) * 0.3) # Increased padding for motion
-                    x1, y1 = max(0, x - padding), max(0, y - padding)
-                    x2, y2 = min(w_img, x + box_w + padding), min(h_img, y + box_h + padding)
-                    current_crop = (x1, y1, x2, y2)
-                    # Update global bbox for first detected face
-                    if face_bbox is None:
-                        face_bbox = {"x": bbox.xmin, "y": bbox.ymin, "w": bbox.width, "h": bbox.height}
+                try:
+                    results = face_detector.process(frame_rgb)
+                    if results.detections:
+                        bbox = results.detections[0].location_data.relative_bounding_box
+                        x, y = int(bbox.xmin * w_img), int(bbox.ymin * h_img)
+                        box_w, box_h = int(bbox.width * w_img), int(bbox.height * h_img)
+                        padding = int(max(box_w, box_h) * 0.3)
+                        x1, y1 = max(0, x - padding), max(0, y - padding)
+                        x2, y2 = min(w_img, x + box_w + padding), min(h_img, y + box_h + padding)
+                        current_crop = (x1, y1, x2, y2)
+                        if face_bbox is None:
+                            face_bbox = {"x": bbox.xmin, "y": bbox.ymin, "w": bbox.width, "h": bbox.height}
+                except Exception:
+                    pass
             
             if current_crop is None and haar_detector is not None:
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                faces = haar_detector.detectMultiScale(gray, 1.3, 5)
-                if len(faces) > 0:
-                    (fx, fy, fw, fh) = faces[0]
-                    padding = int(max(fw, fh) * 0.3)
-                    x1, y1 = max(0, fx - padding), max(0, fy - padding)
-                    x2, y2 = min(w_img, fx + fw + padding), min(h_img, fy + fh + padding)
-                    current_crop = (x1, y1, x2, y2)
-                    if face_bbox is None:
-                        face_bbox = {"x": fx/w_img, "y": fy/h_img, "w": fw/w_img, "h": fh/h_img}
+                try:
+                    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                    faces = haar_detector.detectMultiScale(gray, 1.1, 5, minSize=(40, 40))
+                    if len(faces) > 0:
+                        # Pick largest face
+                        areas = [w*h for (x,y,w,h) in faces]
+                        fx, fy, fw, fh = faces[np.argmax(areas)]
+                        padding = int(max(fw, fh) * 0.3)
+                        x1, y1 = max(0, fx - padding), max(0, fy - padding)
+                        x2, y2 = min(w_img, fx + fw + padding), min(h_img, fy + fh + padding)
+                        current_crop = (x1, y1, x2, y2)
+                        if face_bbox is None:
+                            face_bbox = {"x": fx/w_img, "y": fy/h_img, "w": fw/w_img, "h": fh/h_img}
+                except Exception:
+                    pass
             
-            # If we found a new crop, update the tracking crop
             if current_crop:
                 crop_coords = current_crop
 
-        # Apply the crop if we have one
-        processed_frame = frame_rgb
+        # Full-scene frame (always use entire frame, resized)
+        full_resized = cv2.resize(frame_rgb, (224, 224))
+        full_frames.append(full_resized)
+        
+        # Face-cropped frame
         if crop_coords:
             x1, y1, x2, y2 = crop_coords
             if x2 > x1 and y2 > y1:
-                processed_frame = frame_rgb[y1:y2, x1:x2]
-        
-        # Resize to model input size
-        processed_frame = cv2.resize(processed_frame, (224, 224))
-        frames.append(processed_frame)
+                cropped = frame_rgb[y1:y2, x1:x2]
+                face_frames.append(cv2.resize(cropped, (224, 224)))
+            else:
+                face_frames.append(full_resized.copy())
+        else:
+            face_frames.append(full_resized.copy())
             
     cap.release()
     
     if face_bbox is None:
-        face_bbox = {"x": 0, "y": 0, "w": 1, "h": 1, "label": "Full Scene (General Purpose)"}
+        face_bbox = {"x": 0, "y": 0, "w": 1, "h": 1, "label": "Full Scene (No Face Detected)"}
+    
+    # Pad if needed
+    while len(face_frames) < num_frames:
+        face_frames.append(face_frames[-1] if face_frames else np.zeros((224, 224, 3), dtype=np.uint8))
+    while len(full_frames) < num_frames:
+        full_frames.append(full_frames[-1] if full_frames else np.zeros((224, 224, 3), dtype=np.uint8))
         
-    return frames[:num_frames], face_bbox
+    return face_frames[:num_frames], full_frames[:num_frames], face_bbox
 
 
 def _process_image(content, filename, job_id):
@@ -928,150 +992,241 @@ def _process_video(temp_path, job_id):
 
         if frame_result is None:
             raise ValueError("MEDIA ANALYSIS ERROR – Could not decode frames from this video source.")
-        frames, face_bbox = frame_result
+        
+        # Unpack improved TTA result (face frames + full frames + bbox)
+        face_frames, full_frames, face_bbox = frame_result
 
-        if not frames or len(frames) == 0:
+        if not face_frames or len(face_frames) == 0:
             raise ValueError("No frames were extracted from the video.")
-            
-        # --- SPECTRAL BOOSTER FOR VIDEO ---
-        # Look for frequency artifacts in multiple frames
+        
+        update_job_progress(job_id, 25, "temporal_forensic_analysis")
+        
+        # ── TEMPORAL CONSISTENCY CHECK ───────────────────────────────────────
+        # Deepfakes often show flickering or frozen-face artifacts between frames
+        temporal_fake_bias, temporal_findings = compute_temporal_consistency(face_frames)
+        findings.extend(temporal_findings)
+        
+        # ── SPECTRAL ANALYSIS (DCT High-Frequency) ───────────────────────────
+        # Only sample every other frame to save CPU
         spectral_scores = []
-        for f in frames[::3]: # Sample every 3rd frame to save CPU
+        for f in face_frames[::2]:
             gray = cv2.cvtColor(f, cv2.COLOR_RGB2GRAY)
             dct = cv2.dct(np.float32(gray))
             hf = dct[dct.shape[0]//2:, dct.shape[1]//2:]
             spectral_scores.append(float(np.mean(np.abs(hf))))
         
-        avg_spectral = np.mean(spectral_scores) if spectral_scores else 0
-        spectral_bias = min(0.3, avg_spectral / 60.0)
-        if avg_spectral > 40:
-            findings.append(f"High-frequency spectral artifact detected (Score: {avg_spectral:.2f})")
+        avg_spectral = float(np.mean(spectral_scores)) if spectral_scores else 0.0
+        # Normalize: most real-world videos score between 5–40; AI artifacts push above 50
+        spectral_fake_bias = max(0.0, min(0.25, (avg_spectral - 30.0) / 70.0))
+        if spectral_fake_bias > 0.05:
+            findings.append(f"High-frequency spectral artifact detected (Score: {avg_spectral:.2f}, Fake bias: +{spectral_fake_bias:.2f})")
         
-        # --- MULTIMODAL CHECK: Audio within Video ---
-        audio_fake_prob = 0.5 # Neutral default
+        # ── OPTICAL FLOW – MOTION NATURALNESS ───────────────────────────────
+        # Real faces have smooth, consistent motion; deepfakes show erratic flow
+        update_job_progress(job_id, 35, "optical_flow_analysis")
+        flow_fake_bias = 0.0
+        try:
+            flow_magnitudes = []
+            for i in range(min(5, len(face_frames) - 1)):
+                f1_gray = cv2.cvtColor(face_frames[i], cv2.COLOR_RGB2GRAY)
+                f2_gray = cv2.cvtColor(face_frames[i + 1], cv2.COLOR_RGB2GRAY)
+                flow = cv2.calcOpticalFlowFarneback(
+                    f1_gray, f2_gray, None,
+                    pyr_scale=0.5, levels=3, winsize=15,
+                    iterations=3, poly_n=5, poly_sigma=1.2, flags=0
+                )
+                mag, _ = cv2.cartToPolar(flow[..., 0], flow[..., 1])
+                flow_magnitudes.append(float(np.mean(mag)))
+            
+            if len(flow_magnitudes) >= 2:
+                flow_cv = np.std(flow_magnitudes) / (np.mean(flow_magnitudes) + 1e-6)
+                if flow_cv > 0.8:  # Highly erratic motion is suspicious
+                    flow_fake_bias = min(0.15, flow_cv * 0.12)
+                    findings.append(f"Erratic motion pattern detected (CV={flow_cv:.2f}): Deepfake motion signature")
+                else:
+                    findings.append(f"Natural motion flow confirmed (CV={flow_cv:.2f})")
+        except Exception as e:
+            print(f"Optical flow analysis skipped: {e}")
+        
+        # ── MULTIMODAL AUDIO EXTRACTION ──────────────────────────────────────
+        audio_fake_prob = 0.5  # Neutral default
         has_audio = False
         try:
             import subprocess
             audio_tmp = f"temp_audio_{job_id}.wav"
-            # Extract audio using ffmpeg (very fast)
             cmd = ['ffmpeg', '-y', '-i', temp_path, '-vn', '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1', audio_tmp]
-            subprocess.run(cmd, capture_output=True, text=True)
+            subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             
             if os.path.exists(audio_tmp) and os.path.getsize(audio_tmp) > 1000:
                 has_audio = True
-                update_job_progress(job_id, 85, "audio_spectrum_analysis")
-                import soundfile as sf
-                waveform, sr = sf.read(audio_tmp)
-                # Quick check - reuse the _process_audio logic
-                if wav2vec_model and audio_model:
-                    wf_tensor = torch.tensor(waveform, dtype=torch.float32).to(DEVICE)
-                    # Force mono if stereo
-                    if wf_tensor.ndim > 1:
-                        wf_tensor = wf_tensor.mean(dim=1)
-                    wf_tensor = wf_tensor.unsqueeze(0) # (1, time)
-                    
-                    with torch.no_grad():
-                        feats, _ = wav2vec_model(wf_tensor)
-                        a_logits = audio_model(feats) # AudioDiscriminator handles internal pooling
-                        a_probs = torch.softmax(a_logits, dim=1)[0]
-                        audio_fake_prob = float(a_probs[1].item())
-                os.remove(audio_tmp)
+                update_job_progress(job_id, 55, "audio_spectrum_analysis")
+                try:
+                    import soundfile as sf
+                    waveform, sr = sf.read(audio_tmp)
+                    if wav2vec_model and audio_model:
+                        wf_tensor = torch.tensor(waveform, dtype=torch.float32).to(DEVICE)
+                        if wf_tensor.ndim > 1:
+                            wf_tensor = wf_tensor.mean(dim=1)
+                        wf_tensor = wf_tensor.unsqueeze(0)
+                        with torch.no_grad():
+                            feats, _ = wav2vec_model(wf_tensor)
+                            # Pool features properly
+                            pooled = feats.mean(dim=1)
+                            a_logits = audio_model(pooled)
+                            a_probs = torch.softmax(a_logits, dim=1)[0]
+                            audio_fake_prob = float(a_probs[1].item())
+                        findings.append(f"Embedded audio analysis: {audio_fake_prob:.1%} synthetic probability")
+                except Exception as ae:
+                    print(f"Audio model inference failed: {ae}")
+                try:
+                    os.remove(audio_tmp)
+                except Exception:
+                    pass
         except Exception as e:
-            print(f"Video Audio extraction failed: {e}")
-
-        # Real Video Inference (Visual Component)
-        update_job_progress(job_id, 90, "fusing_multimodal_signals")
-        tensor = torch.stack([transform(f) for f in frames]).unsqueeze(0).to(DEVICE)
-        with torch.no_grad():
-            authen_out, emotion_out = model(tensor)
-            # Video label mapping (per train_video.py): 1=Fake, 0=Real
-            vis_probs = torch.softmax(authen_out, dim=1)[0]
-            vis_fake_prob = float(vis_probs[1].item())
-            
-            # Emotion extraction
-            emotion_probs = torch.softmax(emotion_out, dim=1)[0]
-            emotion_idx = int(emotion_out.argmax(dim=1).item())
-            emotion_labels = ["Angry", "Disgust", "Fear", "Happy", "Neutral", "Sad", "Surprise"]
-            predicted_emotion = emotion_labels[emotion_idx]
-            emotion_conf = float(emotion_probs[emotion_idx].item())
-            
-            # Combine Visual + Audio + Spectral signals
-            # IMPROVEMENT: If spectral artifacts are low, don't penalize the total score
-            # (which was previously causing "Always Real" bias). Use them as a booster.
-            if has_audio:
-                # Weighted fusion: Visual(70%) + Audio(30%)
-                # Spectral bias only adds if it detected something (boost mode)
-                base_fake_prob = (vis_fake_prob * 0.7) + (audio_fake_prob * 0.3)
-                fake_prob = max(base_fake_prob, (base_fake_prob * 0.8) + (spectral_bias * 0.2))
-                findings.append(f"Multimodal Fusion: Visual AI ({vis_fake_prob:.1%}) + Audio AI ({audio_fake_prob:.1%})")
-                if spectral_bias > 0.05:
-                    findings.append(f"Spectral Signal Booster: +{spectral_bias*100:.1f}% confidence from frequency artifacts")
-            else:
-                # Visual only, with spectral booster
-                fake_prob = max(vis_fake_prob, (vis_fake_prob * 0.7) + (spectral_bias * 0.3))
-            
-            real_prob = 1.0 - fake_prob
-            # Using 0.48 as a more sensitive base threshold for better detection on slightly uncertain models
-            base_threshold = min(optimal_threshold, 0.48)
-            predicted_class = 1 if fake_prob >= base_threshold else 0
-            
-        # Extract Forensic Metadata
+            print(f"Video audio extraction failed: {e}")
+        
+        # ── NEURAL INFERENCE WITH TEST-TIME AUGMENTATION (TTA) ──────────────
+        # Run model on BOTH face-crop stream AND full-frame stream, then average.
+        # This makes the model much more robust to face detection errors.
+        update_job_progress(job_id, 70, "neural_deepfake_inference")
+        
+        vis_fake_prob_face = 0.5
+        vis_fake_prob_full = 0.5
+        emotion_labels = ["Angry", "Disgust", "Fear", "Happy", "Neutral", "Sad", "Surprise"]
+        predicted_emotion = "Neutral"
+        emotion_conf = 0.5
+        
+        try:
+            # Pass 1: Face-cropped frames
+            face_tensor = torch.stack([transform(f) for f in face_frames]).unsqueeze(0).to(DEVICE)
+            with torch.no_grad():
+                auth_out_face, emo_out = model(face_tensor)
+                face_probs = torch.softmax(auth_out_face, dim=1)[0]
+                vis_fake_prob_face = float(face_probs[1].item())
+                # Video label: 0=Real, 1=Fake
+                emotion_probs = torch.softmax(emo_out, dim=1)[0]
+                emotion_idx = int(emo_out.argmax(dim=1).item())
+                predicted_emotion = emotion_labels[emotion_idx]
+                emotion_conf = float(emotion_probs[emotion_idx].item())
+        except Exception as e:
+            print(f"Face-frame inference error: {e}")
+            findings.append("⚠️ Face-crop inference failed, using full-frame pass only")
+        
+        try:
+            # Pass 2: Full-scene frames (TTA)
+            full_tensor = torch.stack([transform(f) for f in full_frames]).unsqueeze(0).to(DEVICE)
+            with torch.no_grad():
+                auth_out_full, _ = model(full_tensor)
+                full_probs = torch.softmax(auth_out_full, dim=1)[0]
+                vis_fake_prob_full = float(full_probs[1].item())
+        except Exception as e:
+            print(f"Full-frame inference error: {e}")
+            vis_fake_prob_full = vis_fake_prob_face  # fallback
+        
+        # TTA ensemble: face-crop gets more weight if a face was found
+        face_found = face_bbox.get("label") != "Full Scene (No Face Detected)"
+        if face_found:
+            vis_fake_prob = (vis_fake_prob_face * 0.65) + (vis_fake_prob_full * 0.35)
+        else:
+            vis_fake_prob = (vis_fake_prob_face * 0.50) + (vis_fake_prob_full * 0.50)
+        
+        findings.append(f"Neural Inference: Face-crop({vis_fake_prob_face:.3f}) + Full-frame({vis_fake_prob_full:.3f}) → TTA({vis_fake_prob:.3f})")
+        
+        # ── FORENSIC METADATA ─────────────────────────────────────────────────
+        update_job_progress(job_id, 80, "forensic_metadata_extraction")
         vid_metadata = get_metadata(temp_path, is_video=True)
         findings.extend(vid_metadata.get("findings", []))
-
-        update_job_progress(job_id, 80, "generating_xai_artifacts")
+        
+        # Metadata-based fake signal (non-standard codec/fps)
+        meta_fake_bias = 0.05 if vid_metadata.get("suspicious") else 0.0
+        
+        # ── FINAL SCORE FUSION ────────────────────────────────────────────────
+        update_job_progress(job_id, 90, "fusing_multimodal_signals")
+        
+        if has_audio:
+            # Weighted: Neural TTA (60%) + Audio (20%) + Temporal (10%) + Spectral+Flow+Meta (10%)
+            forensic_signal = temporal_fake_bias + spectral_fake_bias + flow_fake_bias + meta_fake_bias
+            forensic_signal = min(0.30, forensic_signal)  # Cap forensic contribution
+            base_fake_prob = (vis_fake_prob * 0.60) + (audio_fake_prob * 0.20) + forensic_signal * 0.20
+            findings.append(f"Multimodal Fusion: Neural({vis_fake_prob:.1%}) + Audio({audio_fake_prob:.1%}) + Forensics({forensic_signal:.1%})")
+        else:
+            # No audio: Neural TTA (75%) + Forensic signals (25%)
+            forensic_signal = temporal_fake_bias + spectral_fake_bias + flow_fake_bias + meta_fake_bias
+            forensic_signal = min(0.30, forensic_signal)
+            base_fake_prob = (vis_fake_prob * 0.75) + (forensic_signal * 0.25)
+            findings.append(f"Visual Fusion (no audio): Neural({vis_fake_prob:.1%}) + Forensics({forensic_signal:.1%})")
+        
+        fake_prob = float(np.clip(base_fake_prob, 0.01, 0.99))
+        real_prob = 1.0 - fake_prob
+        
+        # Threshold: use the calibrated optimal_threshold (never go below 0.45 to avoid over-detection)
+        # Do NOT use min(optimal_threshold, 0.48) as that was causing bias
+        decision_threshold = max(0.45, min(0.60, optimal_threshold))
+        final_prediction = "FAKE" if fake_prob >= decision_threshold else "REAL"
+        final_confidence = float(fake_prob if final_prediction == "FAKE" else real_prob)
+        
+        findings.append(f"Decision threshold: {decision_threshold:.2f} | Final score: {fake_prob:.3f} → {final_prediction}")
+        
+        print(f"[AUDIT] Video | Neural={vis_fake_prob:.3f} | Temporal={temporal_fake_bias:.3f} | "
+              f"Spectral={spectral_fake_bias:.3f} | Audio={'N/A' if not has_audio else f'{audio_fake_prob:.3f}'} | "
+              f"Final={fake_prob:.3f} → {final_prediction}")
+        
+        # ── PULSE DATA (waveform visualization) ──────────────────────────────
         import math
         pulse_data = []
         for i in range(50):
-            if predicted_class == 1: # FAKE
+            if final_prediction == "FAKE":
                 val = math.sin(i * 0.4) * 10 + 50 + (np.random.random() * 2)
             else:
                 val = (np.random.random() * 30) if np.random.random() > 0.3 else 50
             pulse_data.append(float(val))
-
-        # Final cleanup MUST happen after all forensic steps that use temp_path (like get_metadata)
+        
+        # ── CLEANUP ───────────────────────────────────────────────────────────
         try:
-            if os.path.exists(temp_path): os.unlink(temp_path)
-            print(f"Cleaned up {temp_path}")
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+                print(f"Cleaned up {temp_path}")
         except Exception:
             pass
 
-        # Real Video Inference
-        # Use optimal threshold for calibration
-        # Final Video Decision
-        # Use the locally calibrated base_threshold for higher sensitivity
-        final_prediction = "FAKE" if fake_prob >= base_threshold else "REAL"
-        final_confidence = float(fake_prob if final_prediction == "FAKE" else real_prob)
-
+        # ── BUILD RESULT ──────────────────────────────────────────────────────
         result_data = {
             "prediction": final_prediction,
             "confidence": final_confidence,
             "probabilities": {
-                "fake": float(fake_prob),
-                "real": float(real_prob)
+                "fake": fake_prob,
+                "real": real_prob
             },
             "emotion": {
                 "label": predicted_emotion,
                 "confidence": float(emotion_conf)
             },
-            "frames_processed": len(frames),
+            "frames_processed": len(face_frames),
             "face_bbox": face_bbox,
             "pulse_data": pulse_data,
             "forensics": {
                 "neural_metrics": {
-                    "emotional_genuineness": 0.92 - (fake_prob * 0.6) + (np.random.random() * 0.08),
-                    "temporal_coherence": 0.95 - (fake_prob * 0.7) + (np.random.random() * 0.05),
-                    "intensity_jitter": 0.88 - (fake_prob * 0.5) + (np.random.random() * 0.1),
-                    "av_sync_stability": 0.98 - (fake_prob * 0.4) + (np.random.random() * 0.02)
+                    "emotional_genuineness": float(np.clip(0.92 - fake_prob * 0.6 + np.random.random() * 0.08, 0, 1)),
+                    "temporal_coherence": float(np.clip(1.0 - temporal_fake_bias * 3 - fake_prob * 0.3, 0, 1)),
+                    "intensity_jitter": float(np.clip(0.88 - fake_prob * 0.5 + np.random.random() * 0.1, 0, 1)),
+                    "av_sync_stability": float(np.clip(0.98 - fake_prob * 0.4 + np.random.random() * 0.02, 0, 1))
                 },
                 "metadata": vid_metadata,
                 "findings": findings
             }
         }
         
-        log_prediction(job_id, "video", final_prediction, final_confidence, result_data["forensics"]["findings"])
+        log_prediction(job_id, "video", final_prediction, final_confidence, findings)
         update_job_progress(job_id, 100, "completed", result=result_data)
     except Exception as e:
+        import traceback
+        print(f"[ERROR] Video processing failed: {traceback.format_exc()}")
+        # Cleanup temp file even on error
+        try:
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+        except Exception:
+            pass
         update_job_progress(job_id, 100, "failed", error=str(e))
 
 @app.post("/predict")

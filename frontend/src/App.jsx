@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import {
   Play, UploadCloud, Camera, Mic, Type, ArrowRight, X,
@@ -599,6 +599,8 @@ export default function App() {
 
   const [showTextPaste, setShowTextPaste] = useState(false);
   const [pasteContent, setPasteContent] = useState('');
+  // Stable ref for the hidden text file input — avoids document.getElementById issues
+  const textUploadRef = useRef(null);
 
   const showError = (msg) => {
     setErrorMsg(msg);
@@ -698,7 +700,7 @@ export default function App() {
     image: ['image/jpeg', 'image/png', 'image/webp', 'image/bmp'],
     video: ['video/mp4', 'video/avi', 'video/quicktime', 'video/x-matroska', 'video/webm'],
     audio: ['audio/wav', 'audio/mpeg', 'audio/mp4', 'audio/flac', 'audio/webm'],
-    text: ['text/plain', 'text/markdown'],
+    text: ['text/plain', 'text/markdown', 'text/x-markdown'],
   };
   const MAX_FILE_MB = { image: 10, video: 200, audio: 50 };
 
@@ -748,66 +750,6 @@ export default function App() {
     text:  { accent: '#c87eff', glow: 'rgba(200,126,255,0.3)', bg: '#c87eff', border: 'rgba(200,126,255,0.4)', inputBorder: 'rgba(200,126,255,0.3)' },
   };
 
-  const ModalityCard = ({ modality, icon: Icon, title, description, uploadAccept, uploadId, captureBtnText, captureIcon: CaptureIcon }) => {
-    const c = modalityColors[modality];
-    return (
-      <div id={`${modality}-card`}
-        className="glass-morphism rounded-3xl p-8 flex flex-col items-center text-center border transition-all hover:scale-105 shadow-xl relative overflow-hidden group"
-        style={{ borderColor: c.border, boxShadow: `0 4px 30px ${c.glow}00` }}
-        onMouseEnter={e => e.currentTarget.style.boxShadow = `0 4px 30px ${c.glow}`}
-        onMouseLeave={e => e.currentTarget.style.boxShadow = `0 4px 30px ${c.glow}00`}>
-        <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"
-          style={{ backgroundImage: `linear-gradient(to bottom, ${c.accent}18, transparent)` }} />
-        <Icon size={48} className="mb-4" style={{ color: c.accent }} />
-        <h2 className="text-2xl font-bold mb-2">{title}</h2>
-        <p className="text-sm text-gray-400 mb-6 flex-1">{description}</p>
-        <div className="w-full space-y-3 z-10 relative">
-          {modality !== 'text' ? (
-            <>
-              <button onClick={() => document.getElementById(uploadId).click()}
-                className="w-full py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all hover:opacity-90"
-                style={{ background: c.bg, color: modality === 'image' ? '#000' : '#fff' }}>
-                <UploadCloud size={18} /> Upload {title}
-              </button>
-              <input id={uploadId} type="file" accept={uploadAccept} className="hidden" onChange={e => handleFileUpload(e, modality)} />
-              <button onClick={() => { setSelectedModality(modality); setIsCaptureViewOpen(true); }}
-                className="w-full py-3 rounded-xl font-bold border flex items-center justify-center gap-2 transition-all hover:opacity-90"
-                style={{ borderColor: c.accent, color: c.accent, background: `${c.accent}12` }}>
-                {CaptureIcon && <CaptureIcon size={18} />} {captureBtnText}
-              </button>
-              <div className="flex gap-2">
-                <input id={`${modality}-url-input`} type="url" placeholder={`Paste ${title.toLowerCase()} URL…`}
-                  value={urlInputs[modality] || ''}
-                  onChange={e => setUrlInputs(p => ({ ...p, [modality]: e.target.value }))}
-                  onKeyDown={e => e.key === 'Enter' && handleUrlAnalysis(modality)}
-                  className="flex-1 px-3 py-2 rounded-xl text-sm placeholder-gray-500 focus:outline-none transition-colors"
-                  style={{ background: isDark ? 'rgba(0,0,0,0.4)' : 'rgba(0,0,0,0.06)', border: `1px solid ${c.inputBorder}`, color: isDark ? '#fff' : '#0f172a' }} />
-                <button onClick={() => handleUrlAnalysis(modality)} title="Analyze URL"
-                  className="px-3 py-2 rounded-xl transition-all hover:scale-110"
-                  style={{ background: `${c.accent}22`, border: `1px solid ${c.accent}66`, color: c.accent }}>
-                  <ArrowRight size={16} />
-                </button>
-              </div>
-            </>
-          ) : (
-            <>
-              <button id="paste-text-btn" onClick={() => { console.log("Opening text paste modal..."); setShowTextPaste(true); }}
-                className="w-full py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all hover:opacity-90"
-                style={{ background: c.bg, color: '#fff' }}>
-                <Type size={18} /> Paste Text
-              </button>
-              <button id="upload-doc-btn" onClick={() => document.getElementById('text-upload').click()}
-                className="w-full py-3 rounded-xl font-bold border flex items-center justify-center gap-2 transition-all hover:opacity-90"
-                style={{ borderColor: c.accent, color: c.accent, background: `${c.accent}12` }}>
-                <UploadCloud size={18} /> Upload Document
-              </button>
-              <input id="text-upload" type="file" accept=".txt,.md" className="hidden" onChange={e => handleFileUpload(e, modality)} />
-            </>
-          )}
-        </div>
-      </div>
-    );
-  };
 
   const navTextColor = isDark ? '#fff' : '#1e293b';
 
@@ -968,15 +910,67 @@ export default function App() {
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-8 w-full pb-20">
               <ModalityCard modality="image" icon={UploadCloud} title="Image" uploadAccept="image/*" uploadId="image-upload"
                 captureBtnText="Live Snapshot" captureIcon={Camera}
+                isDark={isDark} urlInputs={urlInputs} setUrlInputs={setUrlInputs}
+                handleFileUpload={handleFileUpload} handleUrlAnalysis={handleUrlAnalysis}
+                onCapture={(modality) => { setSelectedModality(modality); setIsCaptureViewOpen(true); }}
+                onTextPaste={() => setShowTextPaste(true)}
+                modalityColors={modalityColors}
                 description="High-velocity EfficientNet-V2 with spectral DCT boosters and forensic ELA heatmaps." />
               <ModalityCard modality="video" icon={Play} title="Video" uploadAccept="video/*" uploadId="video-upload"
                 captureBtnText="Record Video" captureIcon={Camera}
+                isDark={isDark} urlInputs={urlInputs} setUrlInputs={setUrlInputs}
+                handleFileUpload={handleFileUpload} handleUrlAnalysis={handleUrlAnalysis}
+                onCapture={(modality) => { setSelectedModality(modality); setIsCaptureViewOpen(true); }}
+                onTextPaste={() => setShowTextPaste(true)}
+                modalityColors={modalityColors}
                 description="Multimodal fusion (visual + audio) with ResNet50-LSTM temporal synchronization." />
               <ModalityCard modality="audio" icon={Mic} title="Audio" uploadAccept="audio/*" uploadId="audio-upload"
                 captureBtnText="Record Audio" captureIcon={Mic}
+                isDark={isDark} urlInputs={urlInputs} setUrlInputs={setUrlInputs}
+                handleFileUpload={handleFileUpload} handleUrlAnalysis={handleUrlAnalysis}
+                onCapture={(modality) => { setSelectedModality(modality); setIsCaptureViewOpen(true); }}
+                onTextPaste={() => setShowTextPaste(true)}
+                modalityColors={modalityColors}
                 description="Wav2Vec 2.0 Feature correlation engine to distinguish human from cloned AI speech." />
-              <ModalityCard modality="text" icon={Type} title="Text"
-                description="Advanced semantic analysis with RoBERTa transformers to identify AI writing patterns." />
+              {/* ── TEXT CARD — inlined directly (no component boundary = no remount bug) ── */}
+              <div id="text-card"
+                className="glass-morphism rounded-3xl p-8 flex flex-col items-center text-center border transition-all hover:scale-105 shadow-xl relative overflow-hidden group"
+                style={{ borderColor: 'rgba(200,126,255,0.4)', boxShadow: '0 4px 30px rgba(200,126,255,0)' }}
+                onMouseEnter={e => e.currentTarget.style.boxShadow = '0 4px 30px rgba(200,126,255,0.3)'}
+                onMouseLeave={e => e.currentTarget.style.boxShadow = '0 4px 30px rgba(200,126,255,0)'}>
+                <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"
+                  style={{ backgroundImage: 'linear-gradient(to bottom, rgba(200,126,255,0.12), transparent)' }} />
+                <Type size={48} className="mb-4" style={{ color: '#c87eff' }} />
+                <h2 className="text-2xl font-bold mb-2">Text</h2>
+                <p className="text-sm text-gray-400 mb-6 flex-1">Advanced semantic analysis with RoBERTa transformers to identify AI writing patterns.</p>
+                <div className="w-full space-y-3 z-10 relative">
+                  {/* PASTE TEXT button */}
+                  <button
+                    id="paste-text-btn"
+                    type="button"
+                    onClick={() => setShowTextPaste(true)}
+                    className="w-full py-3 rounded-xl font-bold flex items-center justify-center gap-2"
+                    style={{ background: '#c87eff', color: '#fff', cursor: 'pointer' }}>
+                    <Type size={18} /> Paste Text
+                  </button>
+                  {/* UPLOAD DOCUMENT button */}
+                  <button
+                    id="upload-doc-btn"
+                    type="button"
+                    onClick={() => textUploadRef.current && textUploadRef.current.click()}
+                    className="w-full py-3 rounded-xl font-bold border flex items-center justify-center gap-2"
+                    style={{ borderColor: '#c87eff', color: '#c87eff', background: 'rgba(200,126,255,0.12)', cursor: 'pointer' }}>
+                    <UploadCloud size={18} /> Upload Document
+                  </button>
+                  {/* Hidden file input — controlled by ref, not getElementById */}
+                  <input
+                    ref={textUploadRef}
+                    type="file"
+                    accept=".txt,.md"
+                    className="hidden"
+                    onChange={e => handleFileUpload(e, 'text')} />
+                </div>
+              </div>
             </div>
             <LandingContent isDark={isDark} />
           </div>
@@ -997,6 +991,106 @@ export default function App() {
         )}
         {view === 'analytics' && <AnalyticsDashboard onBack={() => setView('home')} isDark={isDark} />}
       </main>
+    </div>
+  );
+}
+
+// ─── TOP-LEVEL MODALITY CARD ─────────────────────────────────────────────────
+// CRITICAL: This MUST be defined OUTSIDE the App component.
+// Defining it inside App causes React to treat it as a new component type on
+// every render, which remounts it and destroys button click handlers.
+function ModalityCard({
+  modality, icon: Icon, title, description,
+  uploadAccept, uploadId, captureBtnText, captureIcon: CaptureIcon,
+  isDark, urlInputs, setUrlInputs,
+  handleFileUpload, handleUrlAnalysis,
+  onCapture, onTextPaste, modalityColors
+}) {
+  const fileInputRef = React.useRef(null);
+  const c = modalityColors[modality];
+
+  return (
+    <div id={`${modality}-card`}
+      className="glass-morphism rounded-3xl p-8 flex flex-col items-center text-center border transition-all hover:scale-105 shadow-xl relative overflow-hidden group"
+      style={{ borderColor: c.border, boxShadow: `0 4px 30px ${c.glow}00` }}
+      onMouseEnter={e => e.currentTarget.style.boxShadow = `0 4px 30px ${c.glow}`}
+      onMouseLeave={e => e.currentTarget.style.boxShadow = `0 4px 30px ${c.glow}00`}>
+      <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"
+        style={{ backgroundImage: `linear-gradient(to bottom, ${c.accent}18, transparent)` }} />
+      <Icon size={48} className="mb-4" style={{ color: c.accent }} />
+      <h2 className="text-2xl font-bold mb-2">{title}</h2>
+      <p className="text-sm text-gray-400 mb-6 flex-1">{description}</p>
+      <div className="w-full space-y-3 z-10 relative">
+        {modality !== 'text' ? (
+          <>
+            <button
+              onClick={() => fileInputRef.current && fileInputRef.current.click()}
+              className="w-full py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all hover:opacity-90"
+              style={{ background: c.bg, color: modality === 'image' ? '#000' : '#fff' }}>
+              <UploadCloud size={18} /> Upload {title}
+            </button>
+            <input
+              ref={fileInputRef}
+              id={uploadId}
+              type="file"
+              accept={uploadAccept}
+              className="hidden"
+              onChange={e => handleFileUpload(e, modality)} />
+            <button
+              onClick={() => onCapture(modality)}
+              className="w-full py-3 rounded-xl font-bold border flex items-center justify-center gap-2 transition-all hover:opacity-90"
+              style={{ borderColor: c.accent, color: c.accent, background: `${c.accent}12` }}>
+              {CaptureIcon && <CaptureIcon size={18} />} {captureBtnText}
+            </button>
+            <div className="flex gap-2">
+              <input
+                id={`${modality}-url-input`}
+                type="url"
+                placeholder={`Paste ${(title || modality).toLowerCase()} URL…`}
+                value={urlInputs?.[modality] || ''}
+                onChange={e => setUrlInputs(p => ({ ...p, [modality]: e.target.value }))}
+                onKeyDown={e => e.key === 'Enter' && handleUrlAnalysis(modality)}
+                className="flex-1 px-3 py-2 rounded-xl text-sm placeholder-gray-500 focus:outline-none transition-colors"
+                style={{ background: isDark ? 'rgba(0,0,0,0.4)' : 'rgba(0,0,0,0.06)', border: `1px solid ${c.inputBorder}`, color: isDark ? '#fff' : '#0f172a' }} />
+              <button
+                onClick={() => handleUrlAnalysis(modality)}
+                title="Analyze URL"
+                className="px-3 py-2 rounded-xl transition-all hover:scale-110"
+                style={{ background: `${c.accent}22`, border: `1px solid ${c.accent}66`, color: c.accent }}>
+                <ArrowRight size={16} />
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            {/* ── PASTE TEXT button — opens the modal ── */}
+            <button
+              id="paste-text-btn"
+              type="button"
+              onClick={() => onTextPaste()}
+              className="w-full py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all hover:opacity-90"
+              style={{ background: c.bg, color: '#fff' }}>
+              <Type size={18} /> Paste Text
+            </button>
+            {/* ── UPLOAD DOCUMENT button — uses ref, never document.getElementById ── */}
+            <button
+              id="upload-doc-btn"
+              type="button"
+              onClick={() => fileInputRef.current && fileInputRef.current.click()}
+              className="w-full py-3 rounded-xl font-bold border flex items-center justify-center gap-2 transition-all hover:opacity-90"
+              style={{ borderColor: c.accent, color: c.accent, background: `${c.accent}12` }}>
+              <UploadCloud size={18} /> Upload Document
+            </button>
+            <input
+              ref={fileInputRef}
+              id="text-upload"
+              type="file"
+              accept=".txt,.md"
+              className="hidden"
+              onChange={e => handleFileUpload(e, 'text')} />
+          </>
+        )}
+      </div>
     </div>
   );
 }

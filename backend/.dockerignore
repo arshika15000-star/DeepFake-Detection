@@ -1,0 +1,30 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.env
+.venv
+Pipfile
+Pipfile.lock
+
+# Git repo
+.git/
+.gitignore
+
+# Jupyter notebooks
+.ipynb_checkpoints
+
+# Build folders
+build/
+dist/
+*.egg-info/
+
+# Tests shouldn't deploy
+tests/
+
+# Ignore Docker related
+Dockerfile
+.dockerignore

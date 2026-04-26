@@ -5,8 +5,7 @@ import tempfile
 def main() -> None:
     print("TARGETING LARGE-SCALE MULTIMODAL DATASET...")
     import kagglehub
-    # Using a more comprehensive dataset link if possible, or sticking to the current one with better scraping
-    # Prioritize existing local folders for fast sync given space constraints
+    
     print("Scanning for local datasets...")
     path = "C:/Users/Vanshina Saxena/.cache/kagglehub/datasets/reubensuju/celeb-df-v2/versions/1"
     
