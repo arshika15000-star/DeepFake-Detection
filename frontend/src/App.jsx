@@ -15,7 +15,7 @@ const getApiBaseUrl = () => {
   if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_API_BASE_URL) {
     return import.meta.env.VITE_API_BASE_URL;
   }
-  return "http://127.0.0.1:8005";
+  return "https://deepfake-detection-1-l61c.onrender.com";
 };
 const API_BASE = getApiBaseUrl();
 

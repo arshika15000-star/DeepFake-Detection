@@ -1,4 +1,4 @@
-const DEFAULT_BACKEND = 'http://127.0.0.1:8005';
+const DEFAULT_BACKEND = 'https://deepfake-detection-1-l61c.onrender.com';
 
 let backendUrl = DEFAULT_BACKEND;
 let currentModality = 'image';
