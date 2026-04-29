@@ -244,9 +244,7 @@ def load_model():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Load models in the background so the server can start listening immediately
-    # This prevents the 5-10 minute "Network Error" during cold startup/downloads
-    asyncio.create_task(asyncio.to_thread(load_model))
+    # Models are now lazy-loaded upon first request to prevent OOM crashes on free tiers
     yield
     # Cleanup on shutdown (if needed)
 
