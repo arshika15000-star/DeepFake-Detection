@@ -129,118 +129,97 @@ def fuse_predictions(results_dict):
     pred = "FAKE" if fake_prob >= optimal_threshold else "REAL"
     
     return pred, fake_prob
-def load_model():
-    """Load all models on startup to ensure fast inference during demo"""
-    global model, image_model, audio_model, wav2vec_model, text_model, face_detector, transform, image_transform, haar_detector
+def load_model(modality="all"):
+    """Models are now lazy-loaded on demand to prevent Out of Memory (OOM) crashes on Render's free tier."""
+    global model, image_model, audio_model, wav2vec_model, text_model, face_detector, transform, image_transform, haar_detector, meta_clf, optimal_threshold
     
-    print("\n[SYSTEM] Pre-loading all neural models for high-speed inference...")
+    print(f"\n[SYSTEM] Lazy-loading {modality} neural models...")
     
-    # 1. Video Model
-    video_model_path = "video_model_best.pth"
-    if not os.path.exists(video_model_path): video_model_path = "video_model_final.pth"
-    
-    model = DeepfakeDetector(num_frames=FRAMES_PER_VIDEO).to(DEVICE)
-    if os.path.exists(video_model_path):
+    # Always ensure face detectors and meta-classifier are loaded if any modality is requested
+    if face_detector is None or haar_detector is None:
         try:
-            checkpoint = torch.load(video_model_path, map_location=DEVICE)
-            state_dict = checkpoint['model_state_dict'] if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint else checkpoint
-            model.load_state_dict(state_dict, strict=False)
-            print(f"  - Video model loaded from {video_model_path}")
-        except Exception as e:
-            print(f"  - Video weight load failed: {e}")
-    model.eval()
-    transform = get_transforms()
+            from mediapipe.python.solutions import face_detection
+            face_detector = face_detection.FaceDetection(model_selection=1, min_detection_confidence=0.5)
+        except Exception: pass
+        try:
+            cascade_path = os.path.join(cv2.data.haarcascades, 'haarcascade_frontalface_default.xml')
+            haar_detector = cv2.CascadeClassifier(cascade_path)
+        except Exception: pass
+
+    if meta_clf is None:
+        try:
+            import joblib
+            if os.path.exists("meta_classifier.pkl"):
+                meta_clf = joblib.load("meta_classifier.pkl")
+            if os.path.exists("optimal_threshold.pkl"):
+                optimal_threshold = float(joblib.load("optimal_threshold.pkl"))
+                optimal_threshold = min(0.65, max(0.40, optimal_threshold))
+        except Exception: pass
+
+    # 1. Video Model
+    if modality in ["all", "video"] and model is None:
+        video_model_path = "video_model_best.pth" if os.path.exists("video_model_best.pth") else "video_model_final.pth"
+        model = DeepfakeDetector(num_frames=FRAMES_PER_VIDEO).to(DEVICE)
+        if os.path.exists(video_model_path):
+            try:
+                checkpoint = torch.load(video_model_path, map_location=DEVICE)
+                state_dict = checkpoint['model_state_dict'] if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint else checkpoint
+                model.load_state_dict(state_dict, strict=False)
+            except Exception: pass
+        model.eval()
+        transform = get_transforms()
+        print("  - Video model loaded")
 
     # 2. Image Model
-    image_model_path = "deepfake_model_best.pth"
-    if not os.path.exists(image_model_path): image_model_path = "deepfake_model_final.pth"
-    
-    try:
-        from torchvision.models import efficientnet_v2_s, EfficientNet_V2_S_Weights
-        image_model = efficientnet_v2_s(weights=EfficientNet_V2_S_Weights.DEFAULT)
-        in_features = image_model.classifier[-1].in_features
-        image_model.classifier[-1] = nn.Linear(in_features, 2)
-    except Exception:
-        image_model = models.resnext50_32x4d(pretrained=True)
-        in_features = image_model.fc.in_features
-        image_model.fc = nn.Linear(in_features, 2)
-    
-    if os.path.exists(image_model_path):
+    if modality in ["all", "image"] and image_model is None:
+        image_model_path = "deepfake_model_best.pth" if os.path.exists("deepfake_model_best.pth") else "deepfake_model_final.pth"
         try:
-            ck = torch.load(image_model_path, map_location=DEVICE)
-            sd = ck['model_state_dict'] if isinstance(ck, dict) and 'model_state_dict' in ck else ck
-            image_model.load_state_dict(sd, strict=False)
-            print(f"  - Image model loaded from {image_model_path}")
-        except Exception as e:
-            print(f"  - Image weight load failed: {e}")
-    image_model = image_model.to(DEVICE)
-    image_model.eval()
-    
-    image_transform = transforms.Compose([
-        transforms.ToPILImage(),
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
+            from torchvision.models import efficientnet_v2_s, EfficientNet_V2_S_Weights
+            image_model = efficientnet_v2_s(weights=EfficientNet_V2_S_Weights.DEFAULT)
+            in_features = image_model.classifier[-1].in_features
+            image_model.classifier[-1] = nn.Linear(in_features, 2)
+        except Exception:
+            image_model = models.resnext50_32x4d(pretrained=True)
+            image_model.fc = nn.Linear(image_model.fc.in_features, 2)
+        
+        if os.path.exists(image_model_path):
+            try:
+                ck = torch.load(image_model_path, map_location=DEVICE)
+                sd = ck['model_state_dict'] if isinstance(ck, dict) and 'model_state_dict' in ck else ck
+                image_model.load_state_dict(sd, strict=False)
+            except Exception: pass
+        image_model = image_model.to(DEVICE).eval()
+        image_transform = transforms.Compose([
+            transforms.ToPILImage(), transforms.Resize((224, 224)), transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+        print("  - Image model loaded")
 
     # 3. Audio Models
-    try:
-        import torchaudio
-        from text_audio_models import AudioDiscriminator
-        
-        # Wav2Vec Extractor
-        bundle = torchaudio.pipelines.WAV2VEC2_BASE
-        wav2vec_model = bundle.get_model().to(DEVICE)
-        wav2vec_model.eval()
-        
-        # Audio Discriminator
-        audio_model = AudioDiscriminator(feature_dim=768).to(DEVICE)
-        audio_path = "audio_model_best.pth" if os.path.exists("audio_model_best.pth") else "audio_model_final.pth"
-        if os.path.exists(audio_path):
-            audio_model.load_state_dict(torch.load(audio_path, map_location=DEVICE))
-            print(f"  - Audio model loaded from {audio_path}")
-        audio_model.eval()
-    except Exception as e:
-        print(f"  - Audio models failed to load: {e}")
+    if modality in ["all", "audio"] and (wav2vec_model is None or audio_model is None):
+        try:
+            import torchaudio
+            from text_audio_models import AudioDiscriminator
+            wav2vec_model = torchaudio.pipelines.WAV2VEC2_BASE.get_model().to(DEVICE).eval()
+            audio_model = AudioDiscriminator(feature_dim=768).to(DEVICE)
+            audio_path = "audio_model_best.pth" if os.path.exists("audio_model_best.pth") else "audio_model_final.pth"
+            if os.path.exists(audio_path):
+                audio_model.load_state_dict(torch.load(audio_path, map_location=DEVICE))
+            audio_model.eval()
+            print("  - Audio models loaded")
+        except Exception: pass
 
-    # 4. Text Model (Transformer)
-    try:
-        from transformers import pipeline
-        text_model = pipeline("text-classification", model="Hello-SimpleAI/chatgpt-detector-roberta", device=0 if torch.cuda.is_available() else -1)
-        print("  - Text Transformer model loaded")
-    except Exception as e:
-        print(f"  - Text model failed: {e}")
-
-    # 5. Face Detectors (Global Cache)
-    try:
-        from mediapipe.python.solutions import face_detection
-        face_detector = face_detection.FaceDetection(model_selection=1, min_detection_confidence=0.5)
-        print("  - Mediapipe Face Detection initialized")
-    except Exception as e:
-        print(f"  - Mediapipe load failed (falling back to Haar): {e}")
+    # 4. Text Model
+    if modality in ["all", "text"] and text_model is None:
+        try:
+            from transformers import pipeline
+            text_model = pipeline("text-classification", model="Hello-SimpleAI/chatgpt-detector-roberta", device=0 if torch.cuda.is_available() else -1)
+            print("  - Text model loaded")
+        except Exception: pass
     
-    try:
-        cascade_path = os.path.join(cv2.data.haarcascades, 'haarcascade_frontalface_default.xml')
-        haar_detector = cv2.CascadeClassifier(cascade_path)
-    except Exception:
-        pass
-
-    # 6. Meta Classifier & Thresholds
-    try:
-        import joblib
-        if os.path.exists("meta_classifier.pkl"):
-            meta_clf = joblib.load("meta_classifier.pkl")
-            print("  - Meta-classifier loaded successfully")
-        if os.path.exists("optimal_threshold.pkl"):
-            raw_threshold = float(joblib.load("optimal_threshold.pkl"))
-            # SAFETY: If training produced an extreme threshold (e.g. 0.9999), 
-            # it will cause "False Negative" bias. 0.65 is a more sensitive upper bound.
-            optimal_threshold = min(0.65, max(0.40, raw_threshold))
-            print(f"  - Optimal threshold calibrated to: {optimal_threshold:.4f} (Original: {raw_threshold:.4f})")
-    except Exception as e:
-        print(f"  - Meta-classifier load failed: {e}")
-
-    print("[SYSTEM] All models successfully docked in memory. Ready for instant inference.\n")
+    import gc
+    gc.collect()
+    if torch.cuda.is_available(): torch.cuda.empty_cache()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -761,7 +740,7 @@ def _process_image(content, filename, job_id):
         update_job_progress(job_id, 10, "verifying_format")
         
         if image_model is None:
-            load_model()
+            load_model("image")
 
         img = Image.open(io.BytesIO(content)).convert('RGB')
         img_np = np.array(img)
@@ -985,6 +964,8 @@ async def predict_image(background_tasks: BackgroundTasks, file: UploadFile = Fi
 def _process_video(temp_path, job_id):
     findings = []
     try:
+        if model is None:
+            load_model("video")
         update_job_progress(job_id, 10, "extracting_frames")
         frame_result = extract_frames_from_video(temp_path, FRAMES_PER_VIDEO, job_id)
 
@@ -1267,7 +1248,7 @@ def _process_audio(content, filename, job_id):
         
         # --- Pre-loaded Audio Engine ---
         if wav2vec_model is None or audio_model is None:
-            load_model()
+            load_model("audio")
 
         try:
             import librosa
@@ -1398,7 +1379,7 @@ def _process_text(current_text, job_id):
         
         try:
             if text_model is None:
-                load_model()
+                load_model("text")
             
             text_detector = text_model
             

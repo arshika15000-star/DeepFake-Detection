@@ -26,6 +26,8 @@ COPY --chown=user requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
 
 # Pre-download huggingface and PyTorch models to bake them into the Docker image
+# This ensures that the 1GB of model weights are already in the image,
+# making the Space start up much faster.
 COPY --chown=user download_models.py .
 RUN python download_models.py
 
@@ -36,4 +38,5 @@ COPY --chown=user . .
 EXPOSE 7860
 
 # Run the FastAPI server via uvicorn
+# We use port 7860 as required by Hugging Face Spaces
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "7860"]
