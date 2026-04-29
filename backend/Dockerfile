@@ -25,6 +25,10 @@ COPY --chown=user requirements.txt .
 # Docker image small and cheap to host.
 RUN pip install --no-cache-dir -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
 
+# Pre-download huggingface and PyTorch models to bake them into the Docker image
+COPY --chown=user download_models.py .
+RUN python download_models.py
+
 # Copy the rest of the backend source code
 COPY --chown=user . .
 

@@ -665,7 +665,15 @@ export default function App() {
         endpoint = modality === 'image' ? '/predict_image' : modality === 'audio' ? '/predict_audio' : '/predict';
         formData.append('file', inputData);
       }
-      const response = await axios.post(`${API_BASE}${endpoint}`, formData);
+      const response = await axios.post(`${API_BASE}${endpoint}`, formData, {
+        onUploadProgress: (progressEvent) => {
+          if (progressEvent.total) {
+            const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+            // Show upload progress. We cap it at 99% until the server actually responds.
+            setProgress({ percent: Math.min(99, percentCompleted), status: 'uploading to server...' });
+          }
+        }
+      });
       if (response.data.job_id) pollJobStatus(response.data.job_id);
       else { setAnalysisResult(response.data); setView('result'); }
     } catch (err) {
