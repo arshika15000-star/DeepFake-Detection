@@ -10,7 +10,7 @@
     "scripting"
   ],
   "host_permissions": [
-    "https://deepfake-detection-1-l61c.onrender.com/*",
+    "https://vanshika29-deepfake-detection.hf.space/*",
     "<all_urls>"
   ],
   "action": {

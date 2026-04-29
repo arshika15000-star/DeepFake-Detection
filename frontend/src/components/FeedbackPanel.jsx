@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { ThumbsUp, ThumbsDown, MessageSquare, Send, CheckCircle, X } from 'lucide-react';
 import axios from 'axios';
 
-const API_BASE = "https://deepfake-detection-1-l61c.onrender.com";
+const API_BASE = "https://vanshika29-deepfake-detection.hf.space";
 
 export default function FeedbackPanel({ result, mediaType = 'image' }) {
     const [vote, setVote] = useState(null); // 'correct' | 'wrong'

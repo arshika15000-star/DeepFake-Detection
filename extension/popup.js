@@ -1,4 +1,4 @@
-const DEFAULT_BACKEND = 'https://deepfake-detection-1-l61c.onrender.com';
+const DEFAULT_BACKEND = 'https://vanshika29-deepfake-detection.hf.space';
 
 let backendUrl = DEFAULT_BACKEND;
 let currentModality = 'image';

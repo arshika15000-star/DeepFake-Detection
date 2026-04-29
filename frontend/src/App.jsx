@@ -15,7 +15,7 @@ const getApiBaseUrl = () => {
   if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_API_BASE_URL) {
     return import.meta.env.VITE_API_BASE_URL;
   }
-  return "https://deepfake-detection-1-l61c.onrender.com";
+  return "https://vanshika29-deepfake-detection.hf.space";
 };
 const API_BASE = getApiBaseUrl();
 

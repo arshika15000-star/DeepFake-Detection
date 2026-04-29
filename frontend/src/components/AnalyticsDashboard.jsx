@@ -3,7 +3,7 @@ import axios from 'axios';
 import { PieChart, Pie, Cell, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
 import { ArrowLeft, RefreshCw, AlertTriangle, ShieldCheck, Activity } from 'lucide-react';
 
-const API_BASE = "https://deepfake-detection-1-l61c.onrender.com"; // fallback
+const API_BASE = "https://vanshika29-deepfake-detection.hf.space"; // fallback
 
 export default function AnalyticsDashboard({ onBack, isDark }) {
   const [logs, setLogs] = useState([]);
