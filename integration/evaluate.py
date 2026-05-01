@@ -33,7 +33,9 @@ def load_datasets(batch_size=8):
                 paths.append(os.path.join(real_dir, f))
                 labels.append(0)
 
-    dataset = VideoFrameDataset(paths, labels, transform=get_test_transforms(), frames_per_video=FRAMES_PER_VIDEO)
+    # Add dummy emotion labels for evaluation (not needed for authenticity)
+    dummy_emotions = [0] * len(labels)
+    dataset = VideoFrameDataset(paths, labels, dummy_emotions, transform=get_test_transforms(), frames_per_video=FRAMES_PER_VIDEO)
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=0)
     return loader
 

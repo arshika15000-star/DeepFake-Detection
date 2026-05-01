@@ -872,8 +872,7 @@ def _process_image(content, filename, job_id):
         metadata = {"software": "Unknown", "suspicious": False}
         try:
             from PIL.ExifTags import TAGS
-            pil_img_meta = Image.fromarray(input_np)
-            exif_data = pil_img_meta.getexif()
+            exif_data = img.getexif()
             if exif_data:
                 for tag_id in exif_data:
                     tag = TAGS.get(tag_id, tag_id)
@@ -885,33 +884,23 @@ def _process_image(content, filename, job_id):
                             findings.append(f"Forensic Alert: AI Software Signature detected ({data})")
         except: pass
 
-        # --- AUTO-CALIBRATION & ADAPTIVE FUSION ---
-        # Heuristic: Forensics (Spectral, ELA, Metadata) are VERY hard to fake.
-        # If Neural thinks it's REAL but forensics are SCREAMING fake, the model might be flipped.
-        forensic_fake_signal = (dct_fake_bias * 0.6) + (ela_bias * 0.4)
-        if metadata["suspicious"]: forensic_fake_signal += 0.3
+        # --- ROBUST ADAPTIVE FUSION ---
+        combined_fake_prob = neural_fake_v1
         
-        # Cross-reference Check
-        # If they disagree strongly, we bias towards Forensics (math doesn't lie)
-        contradiction = abs(neural_fake_v1 - forensic_fake_signal)
+        # Nudge based on forensics
+        if dct_fake_bias > 0.2: combined_fake_prob += 0.15
+        if ela_bias > 0.6: combined_fake_prob += 0.2
+        if metadata["suspicious"]: combined_fake_prob += 0.25
         
-        if contradiction > 0.7:
-             # Model might be flipped!
-             findings.append("⚠️ BIOMETRIC CONTRADICTION: High forensic-neural dissonance. Calibrating verdict.")
-             raw_fake_prob = forensic_fake_signal if forensic_fake_signal > 0.7 else neural_fake_v1
-        else:
-             # Standard Ensemble
-             raw_fake_prob = (neural_fake_v1 * 0.6) + (forensic_fake_signal * 0.4)
+        # Anti-flip heuristic
+        if neural_fake_v1 < 0.1 and (dct_fake_bias > 0.3 or ela_bias > 0.7):
+            findings.append("⚠️ BIOMETRIC OVERRIDE: Forensic signals outweigh neural model.")
+            combined_fake_prob = max(0.75, (dct_fake_bias + ela_bias)/2)
 
-        combined_fake_prob = min(0.99, max(0.01, raw_fake_prob))
+        combined_fake_prob = min(0.98, max(0.02, combined_fake_prob))
         
-        # Threshold Tuning
-        # Neutral 0.5 for stability
-        # Apply findings
-        findings.append(f"Forensic Audit: Spectral({dct_fake_bias:.2f}), ELA({ela_bias:.2f}), Neural({neural_fake_v1:.2f})")
-        
-        # Consistent Thresholding
-        prediction = "FAKE" if combined_fake_prob >= optimal_threshold else "REAL"
+        # Consistent Thresholding (0.50 for true neutral)
+        prediction = "FAKE" if combined_fake_prob >= 0.50 else "REAL"
         confidence = combined_fake_prob if prediction == "FAKE" else (1.0 - combined_fake_prob)
 
         update_job_progress(job_id, 95, "finalizing_verdict")
@@ -1138,25 +1127,35 @@ def _process_video(temp_path, job_id):
         # ── FINAL SCORE FUSION ────────────────────────────────────────────────
         update_job_progress(job_id, 90, "fusing_multimodal_signals")
         
+        # Base probability from neural model
+        combined_fake_prob = vis_fake_prob
+        
+        # Audio contribution (if available)
         if has_audio:
-            # Weighted: Neural TTA (60%) + Audio (20%) + Temporal (10%) + Spectral+Flow+Meta (10%)
-            forensic_signal = temporal_fake_bias + spectral_fake_bias + flow_fake_bias + meta_fake_bias
-            forensic_signal = min(0.30, forensic_signal)  # Cap forensic contribution
-            base_fake_prob = (vis_fake_prob * 0.60) + (audio_fake_prob * 0.20) + forensic_signal * 0.20
-            findings.append(f"Multimodal Fusion: Neural({vis_fake_prob:.1%}) + Audio({audio_fake_prob:.1%}) + Forensics({forensic_signal:.1%})")
-        else:
-            # No audio: Neural TTA (75%) + Forensic signals (25%)
-            forensic_signal = temporal_fake_bias + spectral_fake_bias + flow_fake_bias + meta_fake_bias
-            forensic_signal = min(0.30, forensic_signal)
-            base_fake_prob = (vis_fake_prob * 0.75) + (forensic_signal * 0.25)
-            findings.append(f"Visual Fusion (no audio): Neural({vis_fake_prob:.1%}) + Forensics({forensic_signal:.1%})")
+            # Shift base towards audio if audio is confident
+            combined_fake_prob = (combined_fake_prob * 0.7) + (audio_fake_prob * 0.3)
+            findings.append(f"Multimodal Fusion: Visual({vis_fake_prob:.1%}) + Audio({audio_fake_prob:.1%})")
+
+        # Forensic Nudge: Forensics should only INCREASE suspicion or slightly decrease if extremely clean
+        # Forensics are normalized here to [0, 0.3]
+        forensic_total = temporal_fake_bias + spectral_fake_bias + flow_fake_bias + meta_fake_bias
         
-        fake_prob = float(np.clip(base_fake_prob, 0.01, 0.99))
-        real_prob = 1.0 - fake_prob
+        if forensic_total > 0.15:
+            combined_fake_prob += 0.15 # Strong boost
+            findings.append(f"Forensic Alert: Secondary biometric markers confirm manipulation ({forensic_total:.2f})")
+        elif forensic_total > 0.05:
+            combined_fake_prob += 0.05 # Slight nudge
+            
+        # --- HIGH CONFIDENCE OVERRIDE ---
+        # If any major signal is > 90%, it's a fake
+        if vis_fake_prob > 0.9 or (has_audio and audio_fake_prob > 0.9):
+            combined_fake_prob = max(combined_fake_prob, 0.95)
+            findings.append("⚠️ HIGH-CERTAINTY OVERRIDE: Neural signal exceeds safety threshold.")
+
+        fake_prob = float(np.clip(combined_fake_prob, 0.01, 0.99))
         
-        # Threshold: use the calibrated optimal_threshold (never go below 0.45 to avoid over-detection)
-        # Do NOT use min(optimal_threshold, 0.48) as that was causing bias
-        decision_threshold = max(0.45, min(0.60, optimal_threshold))
+        # Standard balanced threshold for final output
+        decision_threshold = 0.50 
         final_prediction = "FAKE" if fake_prob >= decision_threshold else "REAL"
         final_confidence = float(fake_prob if final_prediction == "FAKE" else real_prob)
         
@@ -1357,17 +1356,17 @@ def _process_audio(content, filename, job_id):
         if shimmer < 0.02: forensic_signal += 0.3
         if spec_centroid_var < 100: forensic_signal += 0.3
         
-        # Weighted fusion: If forensics are strong, trust them more
-        if forensic_signal > 0.6:
-            combined_fake_prob = (fake_prob * 0.5) + (forensic_signal * 0.5)
+        # Weighted fusion: If forensics are strong, use them to override uncertainty
+        if 0.4 < fake_prob < 0.6:
+            combined_fake_prob = (fake_prob * 0.4) + (forensic_signal if forensic_signal > 0.2 else 0.5) * 0.6
         else:
-            combined_fake_prob = (fake_prob * 0.8) + (forensic_signal * 0.2)
+            # Forensic boost
+            combined_fake_prob = fake_prob + (forensic_signal * 0.2)
             
-        combined_fake_prob = min(0.99, max(0.01, combined_fake_prob))
+        combined_fake_prob = min(0.98, max(0.02, combined_fake_prob))
         
-        # Use balanced threshold for individual audio
-        base_threshold = 0.52
-        pred = "FAKE" if combined_fake_prob >= base_threshold else "REAL"
+        # Balanced threshold
+        pred = "FAKE" if combined_fake_prob >= 0.50 else "REAL"
         confidence = combined_fake_prob if pred == "FAKE" else (1.0 - combined_fake_prob)
 
         result_data = {
