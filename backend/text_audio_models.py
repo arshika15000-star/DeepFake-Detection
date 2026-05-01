@@ -6,11 +6,24 @@ import librosa
 import numpy as np
 
 def extract_audio_features(audio, sr=16000):
-    mfcc       = librosa.feature.mfcc(y=audio, sr=sr, n_mfcc=40)
-    mfcc_delta = librosa.feature.delta(mfcc)       # velocity
-    mfcc_delta2 = librosa.feature.delta(mfcc, order=2)  # acceleration
-    # Shape of each is (40, time), concatenation makes it (120, time)
-    features = np.concatenate([mfcc, mfcc_delta, mfcc_delta2], axis=0)
+    """
+    Enhanced feature extraction for forensic audio analysis.
+    Combines MFCCs with spectral descriptors to capture AI-generated 'mechanical' signatures.
+    """
+    # 1. MFCCs (Standard)
+    mfcc = librosa.feature.mfcc(y=audio, sr=sr, n_mfcc=40)
+    mfcc_delta = librosa.feature.delta(mfcc)
+    mfcc_delta2 = librosa.feature.delta(mfcc, order=2)
+    
+    # 2. Chroma (Harmonic content) - AI often struggles with complex harmonic alignment
+    chroma = librosa.feature.chroma_stft(y=audio, sr=sr)
+    
+    # 3. Spectral Contrast - Captures the 'clarity' vs 'muffleness' of audio bands
+    contrast = librosa.feature.spectral_contrast(y=audio, sr=sr)
+    
+    # Concatenate all features
+    # MFCCs: 120, Chroma: 12, Contrast: 7 -> Total: 139 features per frame
+    features = np.concatenate([mfcc, mfcc_delta, mfcc_delta2, chroma, contrast], axis=0)
     return features
 
 # Text Discriminator (GAN Discriminator style architecture)

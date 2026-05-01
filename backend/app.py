@@ -98,35 +98,52 @@ def is_dummy_data(content, modality="image"):
     return False
 
 def fuse_predictions(results_dict):
-    """Combine results using the trained Gradient Boosting Meta-Classifier"""
+    """Combine results using the trained Meta-Classifier with High-Confidence Override"""
     global meta_clf, optimal_threshold
     
-    # Defaults if meta-classifier isn't loaded
+    # Extract fake probabilities for each modality
+    scores = {
+        'image': results_dict.get('image', {}).get('probabilities', {}).get('fake', 0.5),
+        'video': results_dict.get('video', {}).get('probabilities', {}).get('fake', 0.5),
+        'audio': results_dict.get('audio', {}).get('probabilities', {}).get('fake', 0.5),
+        'text':  results_dict.get('text', {}).get('probabilities', {}).get('fake', 0.5),
+    }
+
+    # --- HIGH CONFIDENCE OVERRIDE ---
+    # If any single modality is EXTREMELY sure (>85% for fake, >95% for real), 
+    # it can influence the final decision more heavily.
+    max_fake = max(scores.values())
+    if max_fake > 0.85:
+        return "FAKE", max_fake
+
+    # Fallback if meta-classifier isn't loaded
     if meta_clf is None:
-        # Fallback to weighted average
-        total_fake_score = 0
-        count = 0
-        for mod, res in results_dict.items():
-            if res:
-                total_fake_score += res['probabilities']['fake']
-                count += 1
-        avg_fake = total_fake_score / count if count > 0 else 0.5
-        pred = "FAKE" if avg_fake > 0.5 else "REAL"
+        # Weighted average fallback
+        weights = {'image': 1.2, 'video': 1.5, 'audio': 1.0, 'text': 0.8}
+        total_score = 0
+        total_weight = 0
+        for mod, score in scores.items():
+            if results_dict.get(mod):
+                w = weights.get(mod, 1.0)
+                total_score += score * w
+                total_weight += w
+        
+        avg_fake = total_score / total_weight if total_weight > 0 else 0.5
+        # Dynamic threshold based on average confidence
+        final_thresh = 0.52 if avg_fake > 0.6 else 0.55
+        pred = "FAKE" if avg_fake >= final_thresh else "REAL"
         return pred, avg_fake
 
-    # Prepare features: [img_fake_prob, vid_fake_prob, aud_fake_prob]
-    # We use 0.5 as neutral if a modality is missing
-    features = [
-        results_dict.get('image', {}).get('probabilities', {}).get('fake', 0.5),
-        results_dict.get('video', {}).get('probabilities', {}).get('fake', 0.5),
-        results_dict.get('audio', {}).get('probabilities', {}).get('fake', 0.5),
-    ]
-    
+    # Prepare features for Gradient Boosting Meta-Classifier
+    features = [scores['image'], scores['video'], scores['audio']]
     input_vector = np.array([features])
     fake_prob = float(meta_clf.predict_proba(input_vector)[0][1])
     
-    # Use calibrated optimal threshold
-    pred = "FAKE" if fake_prob >= optimal_threshold else "REAL"
+    # Calibration: ensure threshold is within sensible bounds
+    effective_threshold = min(0.65, max(0.40, optimal_threshold or 0.55))
+    
+    # Final Decision
+    pred = "FAKE" if fake_prob >= effective_threshold else "REAL"
     
     return pred, fake_prob
 def load_model(modality="all"):
@@ -809,11 +826,10 @@ def _process_image(content, filename, job_id):
         # (Normalization/Heuristic based on extensive forensic literature)
         dct_fake_bias = min(0.4, hf_val / 50.0) 
         
-        # Inference using correct transform (Numpy -> Tensor)
-        tensor = image_transform(input_np).unsqueeze(0).to(DEVICE)
-        
         # --- NEURAL INFERENCE ---
         update_job_progress(job_id, 80, "trans-dimensional_neural_scan")
+        tensor = image_transform(input_np).unsqueeze(0).to(DEVICE)
+        
         with torch.no_grad():
             outputs = image_model(tensor)
             probs = torch.softmax(outputs, dim=1)[0]
@@ -1291,45 +1307,78 @@ def _process_audio(content, filename, job_id):
         
         if os.path.exists(tmp_path): os.remove(tmp_path)
 
-        # --- VOCAL BIOMETRIC ANALYSIS ---
+        # --- VOCAL BIOMETRIC ANALYSIS (SHIMMER & JITTER) ---
         update_job_progress(job_id, 80, "vocal_biometric_analysis")
         # Jitter analysis: Synthetic voices often lack micro-variations
+        jitter = 0.02
+        shimmer = 0.02
+        spec_centroid_var = 0.0
+        
         try:
             import librosa
+            # 1. Pitch Jitter (Micro-frequency variation)
             pitches, magnitudes = librosa.piptrack(y=audio, sr=sample_rate)
             pitch_values = pitches[pitches > 0]
             if len(pitch_values) > 10:
                 jitter = float(np.std(pitch_values) / np.mean(pitch_values))
-                # Humans usually have jitter between 0.01 and 0.08. 
-                # AI is either too high (robotic) or too low (perfect)
-                if jitter < 0.005: 
-                    findings.append("Vocal pattern is abnormally uniform (AI-like regularity)")
-                elif jitter > 0.15:
-                    findings.append("Vocal pattern shows synthetic micro-tremors")
-            else:
-                jitter = 0.02
-        except: jitter = 0.02
+                if jitter < 0.004: 
+                    findings.append("⚠️ Abnormal pitch stability detected (Synthetic marker)")
+                elif jitter > 0.18:
+                    findings.append("⚠️ Erratic pitch tremors detected (Synthetic artifact)")
 
-        # Complexity Index (based on MFCC variance)
-        try:
+            # 2. Shimmer (Micro-amplitude variation)
+            rms = librosa.feature.rms(y=audio)[0]
+            if len(rms) > 5:
+                shimmer = float(np.std(rms) / (np.mean(rms) + 1e-6))
+                if shimmer < 0.01:
+                    findings.append("⚠️ Constant amplitude residue detected (Non-biological speech)")
+
+            # 3. Spectral Brightness & Consistency
+            cent = librosa.feature.spectral_centroid(y=audio, sr=sample_rate)[0]
+            spec_centroid_var = float(np.std(cent))
+            if spec_centroid_var < 50:
+                findings.append("⚠️ Spectral flatness detected (Low acoustic variance typical of TTS)")
+                
+            # Complexity Index (based on MFCC variance)
             mfccs = librosa.feature.mfcc(y=audio, sr=sample_rate, n_mfcc=13)
             complexity = float(np.mean(np.std(mfccs, axis=1)))
-        except: complexity = 15.0
+        except Exception as e: 
+            print(f"Biometric analysis error: {e}")
+            jitter = 0.02
+            shimmer = 0.02
+            complexity = 15.0
         
-        # Real Audio Inference
+        # --- ADAPTIVE HYBRID FUSION ---
         update_job_progress(job_id, 90, "audio_neural_inference")
+        
+        # Forensic signal boost based on biometric markers (Normalized 0.0 - 1.0)
+        forensic_signal = 0.0
+        if jitter < 0.005 or jitter > 0.18: forensic_signal += 0.4
+        if shimmer < 0.02: forensic_signal += 0.3
+        if spec_centroid_var < 100: forensic_signal += 0.3
+        
+        # Weighted fusion: If forensics are strong, trust them more
+        if forensic_signal > 0.6:
+            combined_fake_prob = (fake_prob * 0.5) + (forensic_signal * 0.5)
+        else:
+            combined_fake_prob = (fake_prob * 0.8) + (forensic_signal * 0.2)
+            
+        combined_fake_prob = min(0.99, max(0.01, combined_fake_prob))
+        
         # Use balanced threshold for individual audio
-        base_threshold = min(optimal_threshold, 0.55)
-        pred = "FAKE" if fake_prob >= base_threshold else "REAL"
-        confidence = fake_prob if pred == "FAKE" else real_prob
+        base_threshold = 0.52
+        pred = "FAKE" if combined_fake_prob >= base_threshold else "REAL"
+        confidence = combined_fake_prob if pred == "FAKE" else (1.0 - combined_fake_prob)
 
         result_data = {
             "prediction": pred,
             "confidence": float(confidence),
-            "probabilities": { "fake": float(fake_prob), "real": float(real_prob) },
+            "probabilities": { "fake": float(combined_fake_prob), "real": float(1.0 - combined_fake_prob) },
             "forensics": {
                 "findings": findings,
                 "vocal_jitter": float(jitter),
+                "vocal_shimmer": float(shimmer),
+                "spectral_variance": float(spec_centroid_var),
                 "complexity_index": float(complexity)
             }
         }
